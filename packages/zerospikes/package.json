@@ -1,0 +1,51 @@
+{
+  "name": "zerospikes",
+  "version": "0.1.0",
+  "description": "Interaction performance budgets for Playwright: frame times, input latency per gesture phase and memory cycles, with budgets recorded like snapshots.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eliathx/zerospikes.git",
+    "directory": "packages/zerospikes"
+  },
+  "homepage": "https://github.com/Eliathx/zerospikes#readme",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./reporter": {
+      "types": "./dist/reporter.d.ts",
+      "default": "./dist/reporter.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "npm run build && node --test \"test/**/*.test.mjs\"",
+    "prepack": "npm run build && node -e \"for (const f of ['README.md', 'LICENSE']) require('fs').copyFileSync('../../' + f, f)\""
+  },
+  "keywords": [
+    "performance",
+    "playwright",
+    "jank",
+    "frame-budget",
+    "ci",
+    "interaction"
+  ],
+  "peerDependencies": {
+    "@playwright/test": ">=1.49"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}

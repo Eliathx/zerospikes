@@ -1,0 +1,15 @@
+{
+  "name": "zerospikes-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w zerospikes",
+    "test": "npm test -w zerospikes",
+    "example": "npm run build && npm run dev -w zerospikes-example-20k-table",
+    "example:perf": "npm run build && npm run perf -w zerospikes-example-20k-table"
+  }
+}
