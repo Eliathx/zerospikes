@@ -15,9 +15,10 @@ import { SLOWDOWN_TARGETS, build, exampleDir, measureLatencies, progress, roundT
 const DEFAULT_SAME_BUILD_COMPARISONS = 3;
 const DEFAULT_FACTORS = "1.1,1.25,1.5,2";
 const DEFAULT_BASELINE_RUNS = 3;
+// Neither is the config's own port (4173): on CI the config starts its webServer
+// there and won't reuse a server already listening.
 const BASELINE_PORT = 4174;
-/** The port playwright.config.ts loads; the config reuses a server already listening there. */
-const CANDIDATE_PORT = 4173;
+const CANDIDATE_PORT = 4175;
 const SERVER_READY_TIMEOUT_MS = 30_000;
 const SERVER_POLL_INTERVAL_MS = 250;
 const TABLE_COLUMN_WIDTH = 22;
@@ -32,7 +33,8 @@ const { values: options } = parseArgs({
     "max-sessions": { type: "string" },
   },
 });
-const factors = options.factors.split(",").map(Number);
+// An empty list skips the slowed builds: --factors "" runs only the same-build comparisons.
+const factors = options.factors ? options.factors.split(",").map(Number) : [];
 
 const zerospikesCli = join(dirname(createRequire(import.meta.url).resolve("zerospikes")), "cli.js");
 const baselineDist = join(exampleDir, "zerospikes-results", "compare-baseline-dist");
@@ -40,7 +42,13 @@ const comparisonFile = join(exampleDir, "zerospikes-results", "compare-latest.js
 const urlOf = (port) => `http://localhost:${port}`;
 
 async function serve(distDir, port) {
-  const server = spawn(`npx vite preview --outDir "${distDir}" --port ${port} --strictPort`, { cwd: exampleDir, shell: true, stdio: "ignore" });
+  const server = spawn(`npx vite preview --outDir "${distDir}" --port ${port} --strictPort`, {
+    cwd: exampleDir,
+    shell: true,
+    stdio: "ignore",
+    // Its own process group, so stopping it also stops the vite it started.
+    detached: process.platform !== "win32",
+  });
   const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
@@ -56,7 +64,7 @@ async function serve(distDir, port) {
 function stop(server) {
   if (!server?.pid) return;
   if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(server.pid), "/T", "/F"], { stdio: "ignore" });
-  else server.kill("SIGTERM");
+  else process.kill(-server.pid, "SIGTERM");
 }
 
 /** Runs `zerospikes compare` against the served builds; returns its comparisons. */
