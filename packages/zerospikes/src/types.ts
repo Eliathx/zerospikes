@@ -101,7 +101,8 @@ export interface ScenarioResult {
   project: string;
   metrics: Metrics;
   budget: Metrics | null;
-  status: "pass" | "fail" | "recorded" | "updated";
+  /** `measured`: inside a `zerospikes compare` session, where budgets play no part. */
+  status: "pass" | "fail" | "recorded" | "updated" | "measured";
   violations: Violation[];
   /** Each measured run's metrics; `metrics` holds their medians. */
   runs?: Metrics[];

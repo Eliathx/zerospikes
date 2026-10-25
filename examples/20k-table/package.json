@@ -11,7 +11,8 @@
     "perf": "npm run build && playwright test",
     "perf:update": "npm run build && playwright test -u",
     "perf:reliability": "node scripts/reliability.mjs",
-    "perf:sensitivity": "node scripts/sensitivity.mjs"
+    "perf:sensitivity": "node scripts/sensitivity.mjs",
+    "perf:compare-reliability": "node scripts/compare-reliability.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",

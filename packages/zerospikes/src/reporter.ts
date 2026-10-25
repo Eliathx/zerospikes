@@ -2,6 +2,7 @@ import type { FullConfig, Reporter, Suite, TestCase, TestResult } from "@playwri
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unitOf } from "./budgets.js";
+import { SESSION_ENV } from "./session.js";
 import { metricNames, round } from "./stats.js";
 import type { MetricName, Metrics, ScenarioResult } from "./types.js";
 
@@ -24,6 +25,7 @@ const MARK: Record<ScenarioResult["status"], string> = {
   fail: red("FAIL".padEnd(8)),
   recorded: yellow("NEW".padEnd(8)),
   updated: yellow("UPDATED".padEnd(8)),
+  measured: dim("MEASURED"),
 };
 
 const ANSI = /\x1b\[[0-9;]*m/g;
@@ -242,6 +244,11 @@ export default class ZeroSpikesReporter implements Reporter {
   }
 
   onEnd(): void {
+    const sessionFile = process.env[SESSION_ENV.resultsFile];
+    if (sessionFile) {
+      writeFileSync(sessionFile, JSON.stringify({ results: this.results }));
+      return;
+    }
     if (!this.results.length) return;
     const termWidth = process.stdout.columns || Number(process.env.COLUMNS) || 120;
     const count = (s: ScenarioResult["status"]) => this.results.filter((r) => r.status === s).length;

@@ -9,9 +9,11 @@ const FRAME_MS = 17;
 /**
  * CPU time isn't quantized to display frames and holds still on a busy machine,
  * so its slack is proportional, with a floor for the millisecond or two of
- * noise that light interactions show.
+ * noise that light interactions show. The ratio covers how much a scenario's
+ * CPU time moves from one browser session to the next (up to about ±20% on the
+ * example), which is far more than its runs within one session vary.
  */
-const CPU_SLACK_RATIO = 1.25;
+const CPU_SLACK_RATIO = 1.35;
 const CPU_SLACK_FLOOR_MS = 3;
 
 /**

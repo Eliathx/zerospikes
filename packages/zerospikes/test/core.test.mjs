@@ -57,7 +57,7 @@ test("derived limits leave at least two frames of slack", () => {
 
 test("cpu.main slack is proportional, with a floor for light interactions", () => {
   assert.equal(deriveLimit("cpu.main", 4), 7);
-  assert.equal(deriveLimit("cpu.main", 100), 125);
+  assert.equal(deriveLimit("cpu.main", 100), 135);
 });
 
 test("check reports only metrics over their limit", () => {

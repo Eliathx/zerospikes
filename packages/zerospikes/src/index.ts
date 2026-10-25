@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { BudgetStore, check, deriveBudget, unitOf, validateLimits } from "./budgets.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
+import { SESSION_ENV, inCompareSession } from "./session.js";
 import { aggregate, median, metricNames, round, runMetrics, worstOf } from "./stats.js";
 import {
   INTERACTION_METRICS,
@@ -182,6 +183,7 @@ export class ZeroSpikes {
     const test = this.testInfo.titlePath.slice(1).join(" › ");
     const project = this.testInfo.project.name || "default";
     const key = `${project} › ${test} › ${name}`;
+    if (inCompareSession()) return { kind, key, test, name, project, metrics, budget: null, status: "measured", violations: [] };
     const mode = process.env.ZS_UPDATE ? "all" : this.testInfo.config.updateSnapshots;
     const stored = this.store.get(key);
     let budget: Metrics | null = stored ?? null;
@@ -253,6 +255,7 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
 }
 
 export const test = base.extend<{ zs: ZeroSpikes }>({
+  baseURL: async ({ baseURL }, use) => use(process.env[SESSION_ENV.baseURL] || baseURL),
   zs: async ({ page, browserName }, use, testInfo) => {
     await use(new ZeroSpikes(page, testInfo, browserName === "chromium"));
   },

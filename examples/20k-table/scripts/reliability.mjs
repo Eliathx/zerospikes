@@ -51,12 +51,16 @@ function buildWithMistake(mistake) {
 }
 
 function emptyTally(test) {
-  return { test, runs: 0, failures: 0, failedMetrics: {}, budgetUse: {} };
+  return { test, runs: 0, failures: 0, failedMetrics: {}, budgetUse: {}, measurements: [] };
 }
 
-/** Adds one run of a scenario: whether it failed, which metrics failed, and value ÷ budget for each metric. */
+/**
+ * Adds one run of a scenario: whether it failed, which metrics failed, value ÷ budget
+ * for each metric, and the raw measurements, so other budget rules can be tried on them later.
+ */
 function tally(scenario, result) {
   scenario.runs++;
+  scenario.measurements.push({ metrics: result.metrics, runs: result.runs, samples: result.samples });
   if (result.status === "fail") scenario.failures++;
   for (const violation of result.violations) {
     scenario.failedMetrics[violation.metric] = (scenario.failedMetrics[violation.metric] ?? 0) + 1;
@@ -74,20 +78,20 @@ try {
     progress(`\n${configuration.name}: `);
     buildWithMistake(configuration.mistake);
     const scenarios = {};
+    report.configurations[configuration.name] = { ...configuration, scenarios };
     for (let run = 0; run < configuration.runs; run++) {
       for (const result of runSuite()) {
         tally((scenarios[`${result.test} › ${result.name}`] ??= emptyTally(result.test)), result);
       }
       progress(`${run + 1} `);
     }
-    report.configurations[configuration.name] = { ...configuration, scenarios };
   }
 } finally {
   restoreMistakes();
   build();
+  // Saved even when a run fails partway, so the runs already made aren't lost.
+  console.log(`\n${saveReport("reliability", report)}`);
 }
-
-const reportFile = saveReport("reliability", report);
 
 const percent = (ratio) => `${Math.round(ratio * 100)}%`;
 
@@ -113,4 +117,3 @@ for (const configuration of Object.values(report.configurations)) {
   }
   console.log("");
 }
-console.log(reportFile);

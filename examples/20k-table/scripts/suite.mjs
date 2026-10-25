@@ -31,10 +31,38 @@ function suiteResultFiles() {
 /** Runs the perf suite against the committed budgets, never recording; returns the scenario results the reporter saved. */
 export function runSuite(testTitle) {
   const before = suiteResultFiles();
-  shell(`npx playwright test --update-snapshots=none${testTitle ? ` --grep "${testTitle}"` : ""}`);
+  const run = shell(`npx playwright test --update-snapshots=none${testTitle ? ` --grep "${testTitle}"` : ""}`);
   const created = [...suiteResultFiles()].filter((file) => !before.has(file));
-  if (created.length !== 1) throw new Error(`Expected one new results file from the suite, found ${created.length}`);
+  if (created.length !== 1) {
+    throw new Error(`Expected one new results file from the suite, found ${created.length}. Playwright said:\n${run.stdout}\n${run.stderr}`);
+  }
   return JSON.parse(readFileSync(join(resultsDir, created[0]), "utf8")).results;
+}
+
+/**
+ * The scenarios src/slowdown.ts can slow down: each one's test, the event the
+ * slowdown is added to, and the latency that slowdown scales.
+ */
+export const SLOWDOWN_TARGETS = [
+  { id: "filter", test: "filter as you type", event: "keydown", metric: "input.key" },
+  { id: "sort", test: "sort by client", event: "click", metric: "input.click" },
+  { id: "resize", test: "resize a column", event: "pointermove", metric: "input.move" },
+  { id: "scroll", test: "scroll the grid", event: "wheel", metric: "input.wheel" },
+  { id: "detail", test: "open the detail panel", event: "click", metric: "input.click" },
+];
+
+/** Median latency of each target over `runs` suite runs of the current build: target id → ms. */
+export function measureLatencies(targets, runs) {
+  const latencies = Object.fromEntries(targets.map((target) => [target.id, []]));
+  for (let run = 0; run < runs; run++) {
+    const results = runSuite();
+    for (const target of targets) {
+      const value = results.find((result) => result.test === target.test)?.metrics[target.metric];
+      if (value !== undefined) latencies[target.id].push(value);
+    }
+    progress(`${run + 1} `);
+  }
+  return Object.fromEntries(targets.map((target) => [target.id, median(latencies[target.id])]));
 }
 
 export function saveReport(name, report) {
