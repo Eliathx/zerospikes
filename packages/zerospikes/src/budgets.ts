@@ -7,6 +7,14 @@ import type { MetricName, Metrics, Violation } from "./types.js";
 const FRAME_MS = 17;
 
 /**
+ * CPU time isn't quantized to display frames and holds still on a busy machine,
+ * so its slack is proportional, with a floor for the millisecond or two of
+ * noise that light interactions show.
+ */
+const CPU_SLACK_RATIO = 1.25;
+const CPU_SLACK_FLOOR_MS = 3;
+
+/**
  * Turns a measured value into a budget with room for run-to-run noise. Frame
  * and latency times are quantized to display frames and can land a frame early
  * or late on a busy machine, so the slack is at least two frames; counts and
@@ -21,6 +29,8 @@ export function deriveLimit(metric: MetricName, value: number): number {
       return Math.ceil(v + 50);
     case "memory.listeners":
       return Math.ceil(v + 5);
+    case "cpu.main":
+      return Math.ceil(Math.max(v * CPU_SLACK_RATIO, v + CPU_SLACK_FLOOR_MS));
     case "frame.slow":
     case "frame.long":
       return Math.ceil(v * 1.5) + 2;

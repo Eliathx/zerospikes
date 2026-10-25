@@ -132,6 +132,7 @@ const INTERACTION: Column[] = [
   { title: "frame p95", get: (r) => cell(r.metrics, r.budget, r, "frame.p95") },
   { title: "worst input → frame", get: worstInput },
   { title: "slow frames", get: (r) => cell(r.metrics, r.budget, r, "frame.slow") },
+  { title: "main-thread CPU", get: (r) => cell(r.metrics, r.budget, r, "cpu.main") },
 ];
 
 const MEMORY: Column[] = [
@@ -179,6 +180,9 @@ function failureDetail(r: ScenarioResult): string[] {
     const budget = `budget ${padEnd(formatNumber(line.limit), limitWidth)}${line.fixed ? " (fixed)" : ""}`;
     const value = padStart(formatNumber(line.value) + unitOf(line.metric), valueWidth);
     out.push(`      ${padEnd(line.label, labelWidth)}   ${red(value)}   ${dim(budget)}   ${dim(times)}`);
+  }
+  if (r.cpu) {
+    out.push(`      ${dim("main-thread CPU, median run:")} script ${formatNumber(r.cpu.scriptMs)} ms · layout ${formatNumber(r.cpu.layoutMs)} ms · style ${formatNumber(r.cpu.styleMs)} ms`);
   }
   if (r.hot?.length) {
     out.push(`      ${dim("self time, one profiled run:")}`);

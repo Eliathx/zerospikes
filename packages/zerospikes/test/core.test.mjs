@@ -55,6 +55,11 @@ test("derived limits leave at least two frames of slack", () => {
   assert.equal(deriveLimit("frame.slow", 0), 2);
 });
 
+test("cpu.main slack is proportional, with a floor for light interactions", () => {
+  assert.equal(deriveLimit("cpu.main", 4), 7);
+  assert.equal(deriveLimit("cpu.main", 100), 125);
+});
+
 test("check reports only metrics over their limit", () => {
   const v = check({ "frame.max": 40, "input.move": 10 }, { "frame.max": 34, "input.move": 34, "input.key": 1 }, "budget");
   assert.deepEqual(v, [{ metric: "frame.max", value: 40, limit: 34, source: "budget" }]);

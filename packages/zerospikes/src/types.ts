@@ -8,8 +8,10 @@ export type Phase = "down" | "move" | "up" | "click" | "key" | "wheel";
  * - `frame.slow`: frames longer than two display frames (> 33.4 ms)
  * - `frame.long`: long animation frames (> 50 ms) from the LoAF API; Chromium only
  * - `input.<phase>`: worst time from an input event to the next frame, per phase
+ * - `cpu.main`: time the main thread spent running while the interaction ran, other
+ *   processes' time left out, so it holds still on a busy machine; Chromium only
  */
-export type InteractionMetric = "frame.max" | "frame.p95" | "frame.slow" | "frame.long" | `input.${Phase}`;
+export type InteractionMetric = "frame.max" | "frame.p95" | "frame.slow" | "frame.long" | `input.${Phase}` | "cpu.main";
 
 /**
  * What `cycles` reports: what stayed behind after the cycles, compared with
@@ -36,6 +38,7 @@ export const INTERACTION_METRICS: readonly InteractionMetric[] = [
   "input.click",
   "input.key",
   "input.wheel",
+  "cpu.main",
 ];
 
 export const MEMORY_METRICS: readonly MemoryMetric[] = ["memory.heapMB", "memory.nodes", "memory.listeners"];
@@ -77,6 +80,13 @@ export interface Violation {
   source: "budget" | "fixed";
 }
 
+/** What the main thread's CPU time went into, in ms. Tasks also hold work none of these name (paint, GC, input). */
+export interface CpuBreakdown {
+  scriptMs: number;
+  layoutMs: number;
+  styleMs: number;
+}
+
 export interface HotFunction {
   fn: string;
   selfMs: number;
@@ -95,6 +105,8 @@ export interface ScenarioResult {
   violations: Violation[];
   /** Each measured run's metrics; `metrics` holds their medians. */
   runs?: Metrics[];
+  /** Median split of `cpu.main` across the measured runs. */
+  cpu?: CpuBreakdown;
   samples?: MemorySample[];
   hot?: HotFunction[];
   profilePath?: string;

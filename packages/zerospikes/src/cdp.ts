@@ -1,6 +1,6 @@
 import type { CDPSession } from "@playwright/test";
 import { round } from "./stats.js";
-import type { HotFunction, MemorySample } from "./types.js";
+import type { CpuBreakdown, HotFunction, MemorySample } from "./types.js";
 
 interface ProfileNode {
   id: number;
@@ -61,15 +61,46 @@ export async function stopProfiler(cdp: CDPSession): Promise<CpuProfile> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Pause between the two GC passes, so finalizers queued by the first can run. */
+const GC_PASS_GAP_MS = 100;
+
+/** Forces GC twice: one pass doesn't always reach a steady heap. */
+export async function collectGarbage(cdp: CDPSession): Promise<void> {
+  await cdp.send("HeapProfiler.collectGarbage");
+  await sleep(GC_PASS_GAP_MS);
+  await cdp.send("HeapProfiler.collectGarbage");
+}
+
 /**
- * JS heap and DOM counters after forcing GC. It runs twice because one pass
- * doesn't always reach a steady heap. Counts are steadier than bytes, so leaks
- * of nodes and listeners show even when the heap is noisy.
+ * Makes the renderer's performance counters report time the main thread spent
+ * running (thread ticks) rather than time on the clock, so other processes
+ * taking the CPU away don't count.
+ */
+export async function enableCpuClock(cdp: CDPSession): Promise<void> {
+  await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
+}
+
+/**
+ * Main-thread CPU time so far, in ms. `mainMs` is every task the main thread ran
+ * except DevTools commands, which are the test driving the page, not the app.
+ */
+export async function readCpuClock(cdp: CDPSession): Promise<CpuBreakdown & { mainMs: number }> {
+  const { metrics } = await cdp.send("Performance.getMetrics");
+  const ms = (name: string) => (metrics.find((m) => m.name === name)?.value ?? 0) * 1000;
+  return {
+    mainMs: ms("TaskDuration") - ms("DevToolsCommandDuration"),
+    scriptMs: ms("ScriptDuration"),
+    layoutMs: ms("LayoutDuration"),
+    styleMs: ms("RecalcStyleDuration"),
+  };
+}
+
+/**
+ * JS heap and DOM counters after forcing GC. Counts are steadier than bytes, so
+ * leaks of nodes and listeners show even when the heap is noisy.
  */
 export async function sampleMemory(cdp: CDPSession): Promise<MemorySample> {
-  await cdp.send("HeapProfiler.collectGarbage");
-  await sleep(100);
-  await cdp.send("HeapProfiler.collectGarbage");
+  await collectGarbage(cdp);
   const heap = await cdp.send("Runtime.getHeapUsage");
   const dom = await cdp.send("Memory.getDOMCounters");
   return {

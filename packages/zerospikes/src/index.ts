@@ -1,12 +1,13 @@
 import { test as base, expect, type CDPSession, type Page, type TestInfo } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { BudgetStore, check, deriveBudget, unitOf, validateLimits } from "./budgets.js";
-import { hotFunctions, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
+import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
-import { aggregate, metricNames, round, runMetrics, worstOf } from "./stats.js";
+import { aggregate, median, metricNames, round, runMetrics, worstOf } from "./stats.js";
 import {
   INTERACTION_METRICS,
   MEMORY_METRICS,
+  type CpuBreakdown,
   type CyclesOptions,
   type MeasureOptions,
   type MemorySample,
@@ -25,6 +26,7 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 
 export class ZeroSpikes {
   private cdpSession: CDPSession | null = null;
+  private cpuClockEnabled = false;
   private readonly store: BudgetStore;
 
   constructor(
@@ -40,19 +42,34 @@ export class ZeroSpikes {
    * frames and input latency, takes the median of each metric and checks it
    * against the budget recorded for this scenario. Throws when over budget,
    * after CPU-profiling one more run to say what the time went into.
+   * In Chromium every run starts after a forced GC, so garbage left by the
+   * previous run isn't collected inside this one, and main-thread CPU time is
+   * recorded too.
    */
   async measure(name: string, act: () => Promise<void>, opts: MeasureOptions = {}): Promise<ScenarioResult> {
     const { runs = 5, warmup = 1, before, settleMs = 300, profileOnFail = true } = opts;
     const perRun: Metrics[] = [];
+    const cpuPerRun: CpuBreakdown[] = [];
     // How many long frames each script showed up in, across the measured runs.
     const longFrameScripts = new Map<string, number>();
     for (let i = 0; i < warmup + runs; i++) {
       if (before) await before();
+      const cpuAtStart = this.chromium ? await this.startCpuClock() : null;
       await this.page.evaluate(startRecording);
       await act();
       const recording = await this.page.evaluate(finishRecording, settleMs);
+      const cpuAtEnd = cpuAtStart ? await readCpuClock(await this.cdp()) : null;
       if (i < warmup) continue;
-      perRun.push(runMetrics(recording));
+      const metrics = runMetrics(recording);
+      if (cpuAtStart && cpuAtEnd) {
+        metrics["cpu.main"] = round(cpuAtEnd.mainMs - cpuAtStart.mainMs);
+        cpuPerRun.push({
+          scriptMs: cpuAtEnd.scriptMs - cpuAtStart.scriptMs,
+          layoutMs: cpuAtEnd.layoutMs - cpuAtStart.layoutMs,
+          styleMs: cpuAtEnd.styleMs - cpuAtStart.styleMs,
+        });
+      }
+      perRun.push(metrics);
       for (const frame of recording.longFrames ?? []) {
         for (const script of frame.scripts) longFrameScripts.set(script, (longFrameScripts.get(script) ?? 0) + 1);
       }
@@ -61,6 +78,13 @@ export class ZeroSpikes {
     if (opts.budget) validateLimits(name, opts.budget, INTERACTION_METRICS, metrics);
     const result = this.decide("interaction", name, metrics, worstOf(perRun), opts.budget);
     result.runs = perRun;
+    if (cpuPerRun.length) {
+      result.cpu = {
+        scriptMs: round(median(cpuPerRun.map((c) => c.scriptMs))),
+        layoutMs: round(median(cpuPerRun.map((c) => c.layoutMs))),
+        styleMs: round(median(cpuPerRun.map((c) => c.styleMs))),
+      };
+    }
     if (longFrameScripts.size) {
       result.longFrameScripts = [...longFrameScripts]
         .sort((a, b) => b[1] - a[1])
@@ -71,6 +95,7 @@ export class ZeroSpikes {
     if (result.status === "fail" && profileOnFail && this.chromium) {
       const cdp = await this.cdp();
       if (before) await before();
+      await collectGarbage(cdp);
       await startProfiler(cdp);
       await act();
       await this.page.waitForTimeout(settleMs);
@@ -130,6 +155,17 @@ export class ZeroSpikes {
   /** Resolves on the page's next animation frame: pace scripted input like a person would. */
   frame(): Promise<void> {
     return this.page.evaluate(nextFrame);
+  }
+
+  /** Forces GC, then reads the main thread's CPU clock: the start of a measured window. */
+  private async startCpuClock() {
+    const cdp = await this.cdp();
+    if (!this.cpuClockEnabled) {
+      await enableCpuClock(cdp);
+      this.cpuClockEnabled = true;
+    }
+    await collectGarbage(cdp);
+    return readCpuClock(cdp);
   }
 
   private async cdp(): Promise<CDPSession> {
@@ -199,6 +235,9 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   const lines = [`zerospikes: "${r.name}" is over budget`];
   for (const v of r.violations) {
     lines.push(`  ${v.metric.padEnd(16)} ${String(v.value).padStart(8)}${unitOf(v.metric)}  > ${v.limit}${v.source === "fixed" ? " (fixed limit)" : ""}`);
+  }
+  if (r.cpu) {
+    lines.push("", `  main-thread CPU, median run: script ${r.cpu.scriptMs} ms · layout ${r.cpu.layoutMs} ms · style ${r.cpu.styleMs} ms`);
   }
   if (r.hot?.length) {
     lines.push("", "  self time in one profiled run:");

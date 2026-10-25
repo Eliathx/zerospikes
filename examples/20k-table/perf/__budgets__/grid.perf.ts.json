@@ -6,7 +6,8 @@
       "frame.p95": 41,
       "frame.slow": 2,
       "frame.long": 2,
-      "input.key": 58
+      "input.key": 58,
+      "cpu.main": 52
     },
     "chromium › memory when opening and closing details › open and close 10 invoices": {
       "memory.heapMB": 3,
@@ -21,7 +22,8 @@
       "input.move": 44,
       "input.down": 44,
       "input.up": 43,
-      "input.click": 43
+      "input.click": 43,
+      "cpu.main": 28
     },
     "chromium › resize a column › drag the «Client» border": {
       "frame.max": 46,
@@ -31,14 +33,16 @@
       "input.move": 46,
       "input.down": 40,
       "input.up": 38,
-      "input.click": 38
+      "input.click": 38,
+      "cpu.main": 140
     },
     "chromium › scroll the grid › 15 wheel steps": {
       "frame.max": 47,
       "frame.p95": 41,
       "frame.slow": 2,
       "frame.long": 2,
-      "input.wheel": 66
+      "input.wheel": 66,
+      "cpu.main": 163
     },
     "chromium › sort by client › click the header": {
       "frame.max": 83,
@@ -48,7 +52,8 @@
       "input.move": 88,
       "input.down": 87,
       "input.up": 87,
-      "input.click": 87
+      "input.click": 87,
+      "cpu.main": 83
     }
   }
 }
