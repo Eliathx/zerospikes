@@ -28,6 +28,8 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 export class ZeroSpikes {
   private cdpSession: CDPSession | null = null;
   private cpuClockEnabled = false;
+  /** Scenarios over budget, thrown together when the test ends. */
+  private readonly failures: Error[] = [];
   private readonly store: BudgetStore;
 
   constructor(
@@ -41,8 +43,9 @@ export class ZeroSpikes {
   /**
    * Runs `act` (after `warmup` unmeasured runs) `runs` times while recording
    * frames and input latency, takes the median of each metric and checks it
-   * against the budget recorded for this scenario. Throws when over budget,
-   * after CPU-profiling one more run to say what the time went into.
+   * against the budget recorded for this scenario. When over budget it
+   * CPU-profiles one more run to say what the time went into and fails the
+   * test once it ends, like `expect.soft`: the scenarios after it still run.
    * In Chromium every run starts after a forced GC, so garbage left by the
    * previous run isn't collected inside this one, and main-thread CPU time is
    * recorded too.
@@ -113,7 +116,7 @@ export class ZeroSpikes {
    * Memory check for a repeated cycle (open → edit → close): forces GC and
    * samples heap and DOM counters after every cycle, and checks how much
    * stayed behind compared with the baseline taken after the warm-up.
-   * Chromium only; skipped with an annotation elsewhere.
+   * Chromium only; skipped with an annotation elsewhere. Fails softly, like `measure`.
    */
   async cycles(name: string, cycle: () => Promise<void>, opts: CyclesOptions = {}): Promise<ScenarioResult | null> {
     if (!this.chromium) {
@@ -227,12 +230,23 @@ export class ZeroSpikes {
 
   private async finish(result: ScenarioResult): Promise<ScenarioResult> {
     await this.testInfo.attach("zerospikes", { body: JSON.stringify(result), contentType: "application/json" });
-    if (result.status === "fail") throw new Error(formatFailure(result, this.store.path));
+    // Created here so its stack points at the scenario's line in the test, not at the fixture.
+    if (result.status === "fail") this.failures.push(new Error(formatFailure(result, this.store.path)));
     return result;
+  }
+
+  /** Throws every over-budget scenario of the test at once; called by the fixture after the test body. */
+  assertWithinBudgets(): void {
+    if (!this.failures.length) return;
+    const [first] = this.failures;
+    const message = this.failures.map((e) => e.message).join("\n\n");
+    first.stack = first.stack?.replace(first.message, () => message);
+    first.message = message;
+    throw first;
   }
 }
 
-/** The message of the error a failing scenario throws, shown under the test in Playwright's output. */
+/** The failure message of a scenario over budget, shown under the test in Playwright's output. */
 function formatFailure(r: ScenarioResult, budgetPath: string): string {
   const lines = [`zerospikes: "${r.name}" is over budget`];
   for (const v of r.violations) {
@@ -257,6 +271,8 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
 export const test = base.extend<{ zs: ZeroSpikes }>({
   baseURL: async ({ baseURL }, use) => use(process.env[SESSION_ENV.baseURL] || baseURL),
   zs: async ({ page, browserName }, use, testInfo) => {
-    await use(new ZeroSpikes(page, testInfo, browserName === "chromium"));
+    const zs = new ZeroSpikes(page, testInfo, browserName === "chromium");
+    await use(zs);
+    zs.assertWithinBudgets();
   },
 });
