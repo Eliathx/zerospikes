@@ -1,13 +1,22 @@
 {
-  "version": 1,
+  "version": 2,
+  "environments": {
+    "1gf0u5r": {
+      "cpu": "AMD Ryzen 5 3500 6-Core Processor",
+      "cores": 6,
+      "platform": "win32-x64",
+      "browser": "chromium 156",
+      "headless": true
+    }
+  },
   "budgets": {
     "chromium › filter as you type › type «mar»": {
-      "frame.max": 48,
+      "frame.max": 47,
       "frame.p95": 41,
       "frame.slow": 2,
       "frame.long": 2,
-      "input.key": 59,
-      "cpu.main": 53
+      "input.key": 61,
+      "cpu.main": 74
     },
     "chromium › memory when opening and closing details › open and close 10 invoices": {
       "memory.heapMB": 3,
@@ -19,41 +28,49 @@
       "frame.p95": 41,
       "frame.slow": 2,
       "frame.long": 2,
-      "input.move": 41,
-      "input.down": 41,
-      "input.up": 41,
-      "input.click": 41,
-      "cpu.main": 30
+      "input.move": 48,
+      "input.down": 47,
+      "input.up": 48,
+      "input.click": 48,
+      "cpu.main": 43
     },
     "chromium › resize a column › drag the «Client» border": {
-      "frame.max": 48,
+      "frame.max": 428,
       "frame.p95": 41,
-      "frame.slow": 2,
-      "frame.long": 2,
-      "input.move": 41,
-      "input.down": 41,
-      "input.up": 38,
-      "input.click": 38,
-      "cpu.main": 147
-    },
-    "chromium › scroll the grid › 15 wheel steps": {
-      "frame.max": 47,
-      "frame.p95": 41,
-      "frame.slow": 2,
-      "frame.long": 2,
-      "input.wheel": 60,
-      "cpu.main": 170
-    },
-    "chromium › sort by client › click the header": {
-      "frame.max": 83,
-      "frame.p95": 46,
       "frame.slow": 4,
       "frame.long": 4,
-      "input.move": 89,
-      "input.down": 89,
-      "input.up": 89,
-      "input.click": 89,
-      "cpu.main": 88
+      "input.move": 249,
+      "input.down": 40,
+      "input.up": 41,
+      "input.click": 41,
+      "cpu.main": 165
+    },
+    "chromium › scroll the grid › 15 wheel steps": {
+      "frame.max": 246,
+      "frame.p95": 41,
+      "frame.slow": 5,
+      "frame.long": 4,
+      "input.wheel": 339,
+      "cpu.main": 178
+    },
+    "chromium › sort by client › click the header": {
+      "frame.max": 95,
+      "frame.p95": 41,
+      "frame.slow": 4,
+      "frame.long": 4,
+      "input.move": 107,
+      "input.down": 107,
+      "input.up": 107,
+      "input.click": 107,
+      "cpu.main": 101
     }
+  },
+  "recordedOn": {
+    "chromium › filter as you type › type «mar»": "1gf0u5r",
+    "chromium › memory when opening and closing details › open and close 10 invoices": "1gf0u5r",
+    "chromium › open the detail panel › click a row": "1gf0u5r",
+    "chromium › resize a column › drag the «Client» border": "1gf0u5r",
+    "chromium › scroll the grid › 15 wheel steps": "1gf0u5r",
+    "chromium › sort by client › click the header": "1gf0u5r"
   }
 }

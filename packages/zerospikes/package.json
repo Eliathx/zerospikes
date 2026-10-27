@@ -23,6 +23,10 @@
     "./reporter": {
       "types": "./dist/reporter.d.ts",
       "default": "./dist/reporter.js"
+    },
+    "./history": {
+      "types": "./dist/history.d.ts",
+      "default": "./dist/history.js"
     }
   },
   "files": [

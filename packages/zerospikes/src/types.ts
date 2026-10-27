@@ -1,3 +1,7 @@
+import type { Environment } from "./environment.js";
+
+export type { Environment };
+
 /** Phases an input event is grouped into. A drag is down → move… → up. */
 export type Phase = "down" | "move" | "up" | "click" | "key" | "wheel";
 
@@ -101,9 +105,17 @@ export interface ScenarioResult {
   project: string;
   metrics: Metrics;
   budget: Metrics | null;
-  /** `measured`: inside a `zerospikes compare` session, where budgets play no part. */
-  status: "pass" | "fail" | "recorded" | "updated" | "measured";
+  /**
+   * `measured`: inside a `zerospikes compare` session, where budgets play no part.
+   * `unchecked`: the budget was recorded on another machine, so it wasn't compared
+   * (fixed limits still were).
+   */
+  status: "pass" | "fail" | "recorded" | "updated" | "measured" | "unchecked";
   violations: Violation[];
+  /** Where the scenario ran. */
+  environment?: Environment;
+  /** For `unchecked`: what differs from where the budget was recorded, as `field: recorded → current`. */
+  otherMachine?: string[];
   /** Each measured run's metrics; `metrics` holds their medians. */
   runs?: Metrics[];
   /** Median split of `cpu.main` across the measured runs. */

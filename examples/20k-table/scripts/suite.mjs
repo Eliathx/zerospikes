@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readLatestRun } from "zerospikes/history";
 
 export const exampleDir = dirname(import.meta.dirname);
 const resultsDir = join(exampleDir, "zerospikes-results");
@@ -20,23 +21,15 @@ export function build(env = {}) {
   if (result.status !== 0) throw new Error(`Build failed:\n${result.stdout}\n${result.stderr}`);
 }
 
-function suiteResultFiles() {
-  try {
-    return new Set(readdirSync(resultsDir).filter((file) => file.startsWith("run-")));
-  } catch {
-    return new Set();
-  }
-}
-
 /** Runs the perf suite against the committed budgets, never recording; returns the scenario results the reporter saved. */
 export function runSuite(testTitle) {
-  const before = suiteResultFiles();
+  const before = readLatestRun(resultsDir)?.date;
   const run = shell(`npx playwright test --update-snapshots=none${testTitle ? ` --grep "${testTitle}"` : ""}`);
-  const created = [...suiteResultFiles()].filter((file) => !before.has(file));
-  if (created.length !== 1) {
-    throw new Error(`Expected one new results file from the suite, found ${created.length}. Playwright said:\n${run.stdout}\n${run.stderr}`);
+  const latest = readLatestRun(resultsDir);
+  if (!latest || latest.date === before) {
+    throw new Error(`The suite saved no run. Playwright said:\n${run.stdout}\n${run.stderr}`);
   }
-  return JSON.parse(readFileSync(join(resultsDir, created[0]), "utf8")).results;
+  return latest.results;
 }
 
 /**

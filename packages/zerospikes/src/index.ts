@@ -2,6 +2,7 @@ import { test as base, expect, type CDPSession, type Page, type TestInfo } from 
 import { writeFileSync } from "node:fs";
 import { BudgetStore, check, deriveBudget, unitOf, validateLimits } from "./budgets.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
+import { describeEnvironment, displayRateOf, environmentDifferences, type Environment } from "./environment.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
 import { SESSION_ENV, inCompareSession } from "./session.js";
 import { aggregate, median, metricNames, round, runMetrics, worstOf } from "./stats.js";
@@ -36,6 +37,8 @@ export class ZeroSpikes {
     readonly page: Page,
     private readonly testInfo: TestInfo,
     private readonly chromium: boolean,
+    /** The machine the test runs on; `measure` adds the display rate when headed. */
+    private readonly environment: Environment,
   ) {
     this.store = new BudgetStore(testInfo.file);
   }
@@ -56,6 +59,7 @@ export class ZeroSpikes {
     const cpuPerRun: CpuBreakdown[] = [];
     // How many long frames each script showed up in, across the measured runs.
     const longFrameScripts = new Map<string, number>();
+    const frameGaps: number[] = [];
     for (let i = 0; i < warmup + runs; i++) {
       if (before) await before();
       const cpuAtStart = this.chromium ? await this.startCpuClock() : null;
@@ -74,13 +78,17 @@ export class ZeroSpikes {
         });
       }
       perRun.push(metrics);
+      for (let f = 1; f < recording.frames.length; f++) frameGaps.push(recording.frames[f] - recording.frames[f - 1]);
       for (const frame of recording.longFrames ?? []) {
         for (const script of frame.scripts) longFrameScripts.set(script, (longFrameScripts.get(script) ?? 0) + 1);
       }
     }
     const metrics = aggregate(perRun);
     if (opts.budget) validateLimits(name, opts.budget, INTERACTION_METRICS, metrics);
-    const result = this.decide("interaction", name, metrics, worstOf(perRun), opts.budget);
+    // Headed frames follow the display: its rate is part of where frame times were measured.
+    const environment =
+      this.environment.headless || !frameGaps.length ? this.environment : { ...this.environment, displayHz: displayRateOf(median(frameGaps)) };
+    const result = this.decide("interaction", name, metrics, worstOf(perRun), environment, opts.budget);
     result.runs = perRun;
     if (cpuPerRun.length) {
       result.cpu = {
@@ -139,7 +147,7 @@ export class ZeroSpikes {
       "memory.listeners": last.listeners - first.listeners,
     };
     if (opts.budget) validateLimits(name, opts.budget, MEMORY_METRICS, metrics);
-    const result = this.decide("memory", name, metrics, metrics, opts.budget);
+    const result = this.decide("memory", name, metrics, metrics, this.environment, opts.budget);
     result.samples = samples;
     return this.finish(result);
   }
@@ -180,16 +188,28 @@ export class ZeroSpikes {
   /**
    * Compares `metrics` with the recorded budget, recording or updating it as
    * `-u` / `ZS_UPDATE` say. New budgets are derived from `worst`, so they
-   * already cover the run-to-run spread seen while recording.
+   * already cover the run-to-run spread seen while recording. A budget
+   * recorded on another machine is no limit here: it isn't compared, unless
+   * `-u` records this machine's or `ZS_ANY_MACHINE` asks to compare anyway.
    */
-  private decide(kind: ScenarioResult["kind"], name: string, metrics: Metrics, worst: Metrics, fixed?: Metrics): ScenarioResult {
+  private decide(
+    kind: ScenarioResult["kind"],
+    name: string,
+    metrics: Metrics,
+    worst: Metrics,
+    environment: Environment,
+    fixed?: Metrics,
+  ): ScenarioResult {
     const test = this.testInfo.titlePath.slice(1).join(" › ");
     const project = this.testInfo.project.name || "default";
     const key = `${project} › ${test} › ${name}`;
-    if (inCompareSession()) return { kind, key, test, name, project, metrics, budget: null, status: "measured", violations: [] };
+    const base = { kind, key, test, name, project, metrics, environment };
+    if (inCompareSession()) return { ...base, budget: null, status: "measured", violations: [] };
     const mode = process.env.ZS_UPDATE ? "all" : this.testInfo.config.updateSnapshots;
     const stored = this.store.get(key);
-    let budget: Metrics | null = stored ?? null;
+    const otherMachine =
+      stored?.environment && !process.env.ZS_ANY_MACHINE ? environmentDifferences(stored.environment, environment) : [];
+    let budget: Metrics | null = stored?.budget ?? null;
     let status: ScenarioResult["status"];
     let violations: Violation[] = [];
 
@@ -198,24 +218,26 @@ export class ZeroSpikes {
         status = "pass";
       } else {
         budget = deriveBudget(worst);
-        this.store.set(key, budget);
+        this.store.set(key, budget, environment);
         status = "recorded";
       }
+    } else if (otherMachine.length && mode !== "all" && mode !== "changed") {
+      status = "unchecked";
     } else {
-      violations = check(metrics, stored, "budget");
-      if (mode === "all" || (mode === "changed" && violations.length)) {
+      violations = check(metrics, stored.budget, "budget");
+      if (mode === "all" || (mode === "changed" && (violations.length || otherMachine.length))) {
         budget = deriveBudget(worst);
-        this.store.set(key, budget);
+        this.store.set(key, budget, environment);
         violations = [];
         status = "updated";
       } else {
         // A metric seen for the first time (a new input phase) gets a budget without failing.
-        const added = metricNames(metrics).filter((name: MetricName) => !(name in stored));
+        const added = metricNames(metrics).filter((name: MetricName) => !(name in stored.budget));
         if (added.length && mode !== "none") {
           const derived = deriveBudget(worst);
-          budget = { ...stored };
+          budget = { ...stored.budget };
           for (const metric of added) budget[metric] = derived[metric];
-          this.store.set(key, budget);
+          this.store.set(key, budget, stored.environment ?? environment);
         }
         status = violations.length ? "fail" : "pass";
       }
@@ -225,7 +247,7 @@ export class ZeroSpikes {
       violations.push(...over);
       if (over.length) status = "fail";
     }
-    return { kind, key, test, name, project, metrics, budget, status, violations };
+    return { ...base, budget, status, violations, ...(status === "unchecked" ? { otherMachine } : {}) };
   }
 
   private async finish(result: ScenarioResult): Promise<ScenarioResult> {
@@ -270,8 +292,9 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
 
 export const test = base.extend<{ zs: ZeroSpikes }>({
   baseURL: async ({ baseURL }, use) => use(process.env[SESSION_ENV.baseURL] || baseURL),
-  zs: async ({ page, browserName }, use, testInfo) => {
-    const zs = new ZeroSpikes(page, testInfo, browserName === "chromium");
+  zs: async ({ page, browser, browserName }, use, testInfo) => {
+    const environment = describeEnvironment({ name: browserName, version: browser.version() }, testInfo.project.use.headless ?? true);
+    const zs = new ZeroSpikes(page, testInfo, browserName === "chromium", environment);
     await use(zs);
     zs.assertWithinBudgets();
   },

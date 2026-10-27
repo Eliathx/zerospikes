@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { environmentId, type Environment } from "./environment.js";
 import { metricNames } from "./stats.js";
 import type { MetricName, Metrics, Violation } from "./types.js";
 
@@ -80,10 +81,26 @@ export function validateLimits(scenario: string, limits: Metrics, known: readonl
   }
 }
 
+/**
+ * Version 2 adds where each budget was recorded: `environments` names each
+ * machine once, `recordedOn` points every budget at one. Version 1 files have
+ * neither and still read: their budgets just have no machine to check.
+ */
 interface BudgetFile {
-  version: 1;
+  version: 2;
+  environments: Record<string, Environment>;
   budgets: Record<string, Metrics>;
+  recordedOn: Record<string, string>;
 }
+
+export interface StoredBudget {
+  budget: Metrics;
+  /** Where it was recorded; undefined for budgets written before this was stored. */
+  environment?: Environment;
+}
+
+const sortedByKey = <T>(record: Record<string, T>): Record<string, T> =>
+  Object.fromEntries(Object.keys(record).sort().map((key) => [key, record[key]]));
 
 /**
  * Budgets for one spec file, stored next to it in `__budgets__/<spec>.json` and
@@ -97,21 +114,31 @@ export class BudgetStore {
   }
 
   private read(): BudgetFile {
-    if (!existsSync(this.path)) return { version: 1, budgets: {} };
-    return JSON.parse(readFileSync(this.path, "utf8")) as BudgetFile;
+    if (!existsSync(this.path)) return { version: 2, environments: {}, budgets: {}, recordedOn: {} };
+    const file = JSON.parse(readFileSync(this.path, "utf8")) as Partial<BudgetFile>;
+    return { version: 2, environments: file.environments ?? {}, budgets: file.budgets ?? {}, recordedOn: file.recordedOn ?? {} };
   }
 
-  get(key: string): Metrics | undefined {
-    return this.read().budgets[key];
+  get(key: string): StoredBudget | undefined {
+    const file = this.read();
+    const budget = file.budgets[key];
+    if (!budget) return undefined;
+    const id = file.recordedOn[key];
+    return { budget, environment: id ? file.environments[id] : undefined };
   }
 
   /** Read-modify-write, so several scenarios of one file can record in turn. */
-  set(key: string, budget: Metrics): void {
+  set(key: string, budget: Metrics, environment: Environment): void {
     const file = this.read();
+    const id = environmentId(environment);
     file.budgets[key] = budget;
-    const sorted: Record<string, Metrics> = {};
-    for (const k of Object.keys(file.budgets).sort()) sorted[k] = file.budgets[k];
+    file.recordedOn[key] = id;
+    file.environments[id] = environment;
+    // Machines no budget points at any more are dropped.
+    const used = new Set(Object.values(file.recordedOn));
+    const environments = Object.fromEntries(Object.entries(file.environments).filter(([envId]) => used.has(envId)));
     mkdirSync(dirname(this.path), { recursive: true });
-    writeFileSync(this.path, JSON.stringify({ version: 1, budgets: sorted }, null, 2) + "\n");
+    const out: BudgetFile = { version: 2, environments: sortedByKey(environments), budgets: sortedByKey(file.budgets), recordedOn: sortedByKey(file.recordedOn) };
+    writeFileSync(this.path, JSON.stringify(out, null, 2) + "\n");
   }
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { aggregate, median, quantile, runMetrics, worstOf } from "../dist/stats.js";
@@ -80,9 +80,11 @@ test("validateLimits rejects a limit on a metric the scenario didn't produce", (
 test("BudgetStore keeps budgets sorted next to the spec", () => {
   const dir = mkdtempSync(join(tmpdir(), "zs-"));
   const store = new BudgetStore(join(dir, "grid.perf.ts"));
-  store.set("b", { "frame.max": 1 });
-  store.set("a", { "frame.max": 2 });
+  const machine = { cpu: "test", cores: 1, platform: "linux-x64", browser: "chromium 140", headless: true };
+  store.set("b", { "frame.max": 1 }, machine);
+  store.set("a", { "frame.max": 2 }, machine);
   assert.equal(store.path, join(dir, "__budgets__", "grid.perf.ts.json"));
-  assert.deepEqual(store.get("a"), { "frame.max": 2 });
-  assert.deepEqual(new BudgetStore(join(dir, "grid.perf.ts")).get("b"), { "frame.max": 1 });
+  assert.deepEqual(store.get("a"), { budget: { "frame.max": 2 }, environment: machine });
+  assert.deepEqual(new BudgetStore(join(dir, "grid.perf.ts")).get("b")?.budget, { "frame.max": 1 });
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(store.path, "utf8")).budgets), ["a", "b"]);
 });

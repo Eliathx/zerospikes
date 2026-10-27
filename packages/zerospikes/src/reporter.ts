@@ -2,12 +2,14 @@ import type { FullConfig, Reporter, Suite, TestCase, TestResult } from "@playwri
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unitOf } from "./budgets.js";
+import { readGitState } from "./git.js";
+import { recordRun } from "./history.js";
 import { SESSION_ENV } from "./session.js";
 import { metricNames, round } from "./stats.js";
 import type { MetricName, Metrics, ScenarioResult } from "./types.js";
 
 export interface ZeroSpikesReporterOptions {
-  /** Folder for the run's JSON, relative to the config. Default `zerospikes-results`. */
+  /** Folder for the run history, relative to the config. Default `zerospikes-results`. */
   outputDir?: string;
 }
 
@@ -26,6 +28,7 @@ const MARK: Record<ScenarioResult["status"], string> = {
   recorded: yellow("NEW".padEnd(8)),
   updated: yellow("UPDATED".padEnd(8)),
   measured: dim("MEASURED"),
+  unchecked: yellow("SKIP".padEnd(8)),
 };
 
 const ANSI = /\x1b\[[0-9;]*m/g;
@@ -58,7 +61,9 @@ function cell(metrics: Metrics, budget: Metrics | null, r: ScenarioResult, metri
   const value = metrics[metric];
   if (value === undefined) return null;
   const violation = r.violations.find((v) => v.metric === metric);
-  return { tag, text: formatNumber(value), limit: violation?.limit ?? budget?.[metric], over: !!violation };
+  // An unchecked scenario's budget belongs to another machine: showing it as the limit would mislead.
+  const limit = violation?.limit ?? (r.status === "unchecked" ? undefined : budget?.[metric]);
+  return { tag, text: formatNumber(value), limit, over: !!violation };
 }
 
 function renderCell(content: Cell | null, widths: Widths): string {
@@ -195,6 +200,23 @@ function failureDetail(r: ScenarioResult): string[] {
   return out;
 }
 
+/** Why some scenarios were skipped: one line per distinct difference, usually one for the whole run. */
+function otherMachineNote(results: ScenarioResult[]): string[] {
+  const byDifference = new Map<string, number>();
+  for (const r of results) {
+    if (r.status !== "unchecked" || !r.otherMachine) continue;
+    const difference = r.otherMachine.join(", ");
+    byDifference.set(difference, (byDifference.get(difference) ?? 0) + 1);
+  }
+  if (!byDifference.size) return [];
+  const out: string[] = [];
+  for (const [difference, count] of byDifference) {
+    out.push(`  ${MARK.unchecked}${count} scenario${count === 1 ? "" : "s"}: budgets recorded on another machine (${difference})`);
+  }
+  out.push(dim("      not compared: their numbers are no limit here. Record this machine's with -u, or compare two builds with zerospikes compare"), "");
+  return out;
+}
+
 /** One table per kind of scenario at the end of the run, details of the failures, and a JSON of it all. */
 export default class ZeroSpikesReporter implements Reporter {
   private readonly results: ScenarioResult[] = [];
@@ -256,6 +278,7 @@ export default class ZeroSpikesReporter implements Reporter {
     parts.push(count("fail") ? red(`${count("fail")} over budget`) : green("all within budget"));
     if (count("recorded")) parts.push(yellow(`${count("recorded")} budgets recorded`));
     if (count("updated")) parts.push(yellow(`${count("updated")} budgets updated`));
+    if (count("unchecked")) parts.push(yellow(`${count("unchecked")} with budgets from another machine`));
 
     const lines = ["", `  ${bold("zerospikes")}  ${parts.join(dim(" · "))}`, ""];
     const interactions = this.results.filter((r) => r.kind === "interaction");
@@ -265,11 +288,11 @@ export default class ZeroSpikesReporter implements Reporter {
     if (memory.length) tables.push(layout("Memory", memory, MEMORY));
     lines.push(...render(tables, termWidth));
     for (const r of this.results.filter((x) => x.status === "fail")) lines.push(...failureDetail(r), "");
+    lines.push(...otherMachineNote(this.results));
 
     const dir = join(this.rootDir, this.options.outputDir ?? "zerospikes-results");
     mkdirSync(dir, { recursive: true });
-    const file = join(dir, `run-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-    writeFileSync(file, JSON.stringify({ date: new Date().toISOString(), results: this.results }, null, 2));
+    const file = recordRun(dir, { date: new Date().toISOString(), git: readGitState(this.rootDir), results: this.results });
     lines.push(dim("  ms unless named · value ≤ budget"), dim(`  ${file}`), "");
     console.log(lines.join("\n"));
   }
