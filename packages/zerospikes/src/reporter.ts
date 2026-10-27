@@ -5,40 +5,14 @@ import { unitOf } from "./budgets.js";
 import { readGitState } from "./git.js";
 import { recordRun } from "./history.js";
 import { SESSION_ENV } from "./session.js";
-import { metricNames, round } from "./stats.js";
+import { metricNames } from "./stats.js";
+import { bold, dim, formatNumber, green, MARK, padEnd, padStart, red, truncate, visibleWidth, yellow } from "./terminal.js";
 import type { MetricName, Metrics, ScenarioResult } from "./types.js";
 
 export interface ZeroSpikesReporterOptions {
   /** Folder for the run history, relative to the config. Default `zerospikes-results`. */
   outputDir?: string;
 }
-
-const color = process.stdout.isTTY && !process.env.NO_COLOR;
-const paint = (code: number) => (s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
-const red = paint(31);
-const green = paint(32);
-const yellow = paint(33);
-const dim = paint(2);
-const bold = paint(1);
-
-/** Status words, padded to the widest (`UPDATED`) plus a space, so the names after them line up. */
-const MARK: Record<ScenarioResult["status"], string> = {
-  pass: green("PASS".padEnd(8)),
-  fail: red("FAIL".padEnd(8)),
-  recorded: yellow("NEW".padEnd(8)),
-  updated: yellow("UPDATED".padEnd(8)),
-  measured: dim("MEASURED"),
-  unchecked: yellow("SKIP".padEnd(8)),
-};
-
-const ANSI = /\x1b\[[0-9;]*m/g;
-const visibleWidth = (s: string) => [...s.replace(ANSI, "")].length;
-const padEnd = (s: string, n: number) => s + " ".repeat(Math.max(0, n - visibleWidth(s)));
-const padStart = (s: string, n: number) => " ".repeat(Math.max(0, n - visibleWidth(s))) + s;
-const truncate = (s: string, n: number) => ([...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s);
-
-/** Whole numbers from 100 up, one decimal below: `1515`, `6.2`. */
-const formatNumber = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : String(round(v)));
 
 interface Cell {
   /** Left-aligned word before the value, such as the input phase. */

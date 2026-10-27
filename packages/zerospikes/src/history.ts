@@ -20,6 +20,7 @@ export interface Run {
 export interface IndexedScenario {
   status: ScenarioResult["status"];
   metrics: Metrics;
+  budget: Metrics | null;
 }
 
 export interface IndexedRun {
@@ -35,12 +36,15 @@ export interface HistoryIndex {
   runs: IndexedRun[];
 }
 
-/** A file is compressed again whole on every run, so its size is capped to keep that fast. */
-export const RUNS_PER_FILE = 1000;
+/**
+ * A file is compressed again whole on every run, so its uncompressed size is
+ * capped to keep that around a tenth of a second.
+ */
+export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const INDEX_FILE = "index.json";
 const FILE_NUMBER_DIGITS = 4;
 
-/** Seconds at the highest quality; tens of milliseconds at this one, for files about 30% bigger. */
+/** Seconds at the highest quality; a tenth of that at this one, for files about 30% bigger. */
 const BROTLI_QUALITY = 5;
 /** Brotli's largest window (16 MB), so each run can reuse what the runs before it share. */
 const BROTLI_WINDOW_BITS = 24;
@@ -55,12 +59,17 @@ const COMPRESSION = {
 const historyFileName = (number: number) => `runs-${String(number).padStart(FILE_NUMBER_DIGITS, "0")}.ndjson.br`;
 const historyFileNumber = (file: string) => Number(/^runs-(\d+)/.exec(file)?.[1]);
 
-export function readHistoryFile(dir: string, file: string): Run[] {
+function readLines(dir: string, file: string): string[] {
   const path = join(dir, file);
   if (!existsSync(path)) return [];
-  const lines = brotliDecompressSync(readFileSync(path)).toString("utf8").split("\n");
-  return lines.filter(Boolean).map((line) => JSON.parse(line) as Run);
+  return brotliDecompressSync(readFileSync(path)).toString("utf8").split("\n").filter(Boolean);
 }
+
+export function readHistoryFile(dir: string, file: string): Run[] {
+  return readLines(dir, file).map((line) => JSON.parse(line) as Run);
+}
+
+const byteSize = (lines: string[]) => lines.reduce((total, line) => total + Buffer.byteLength(line) + 1, 0);
 
 export function readIndex(dir: string): HistoryIndex {
   const path = join(dir, INDEX_FILE);
@@ -85,25 +94,25 @@ function writeAtomically(path: string, data: string | Buffer): void {
 
 function indexEntryOf(run: Run, file: string): IndexedRun {
   const scenarios: Record<string, IndexedScenario> = {};
-  for (const result of run.results) scenarios[result.key] = { status: result.status, metrics: result.metrics };
+  for (const result of run.results) scenarios[result.key] = { status: result.status, metrics: result.metrics, budget: result.budget };
   return { date: run.date, git: run.git, file, scenarios };
 }
 
 /**
- * Appends a run to the newest history file, or starts the next one when it's
- * full. Not safe for two test runs saving into the same folder at once.
+ * Appends a run to the newest history file, or starts the next one when the
+ * run wouldn't fit. Not safe for two test runs saving into the same folder at once.
  */
 export function recordRun(dir: string, run: Run): string {
   const index = readIndex(dir);
+  const line = JSON.stringify(run);
   let file = index.runs.at(-1)?.file ?? historyFileName(1);
-  let runs = readHistoryFile(dir, file);
-  if (runs.length >= RUNS_PER_FILE) {
+  let lines = readLines(dir, file);
+  if (lines.length && byteSize(lines) + byteSize([line]) > MAX_FILE_BYTES) {
     file = historyFileName(historyFileNumber(file) + 1);
-    runs = [];
+    lines = [];
   }
-  runs.push(run);
-  const ndjson = runs.map((r) => JSON.stringify(r)).join("\n") + "\n";
-  writeAtomically(join(dir, file), brotliCompressSync(ndjson, COMPRESSION));
+  lines.push(line);
+  writeAtomically(join(dir, file), brotliCompressSync(lines.join("\n") + "\n", COMPRESSION));
 
   index.runs.push(indexEntryOf(run, file));
   writeAtomically(join(dir, INDEX_FILE), JSON.stringify(index) + "\n");
