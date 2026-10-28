@@ -7,7 +7,7 @@ import { recordRun } from "./history.js";
 import { SESSION_ENV } from "./session.js";
 import { metricNames } from "./stats.js";
 import { bold, dim, formatNumber, green, MARK, padEnd, padStart, red, truncate, visibleWidth, yellow } from "./terminal.js";
-import type { MetricName, Metrics, ScenarioResult } from "./types.js";
+import type { MetricName, Metrics, ScenarioResult, TargetMiss } from "./types.js";
 
 export interface ZeroSpikesReporterOptions {
   /** Folder for the run history, relative to the config. Default `zerospikes-results`. */
@@ -191,6 +191,46 @@ function otherMachineNote(results: ScenarioResult[]): string[] {
   return out;
 }
 
+/** Scenarios over a target: one line each, with every metric over. A warning, so the run still passes. */
+function targetNote(results: ScenarioResult[]): string[] {
+  const over = results.filter((r) => r.overTarget?.length);
+  if (!over.length) return [];
+  const out = [`  ${yellow("Over target")} ${dim("(warning only: the budgets above decide pass or fail)")}`];
+  const width = Math.max(...over.map((r) => [...label(r)].length));
+  for (const r of over) {
+    // Input phases of one click often share a number, as in failureDetail: one entry for them.
+    const grouped = new Map<string, { names: string[]; miss: TargetMiss }>();
+    for (const miss of r.overTarget!) {
+      const phase = miss.metric.startsWith("input.") ? miss.metric.slice("input.".length) : null;
+      const key = phase ? `input:${formatNumber(miss.value)}` : miss.metric;
+      const entry = grouped.get(key);
+      if (entry && phase) entry.names.push(phase);
+      else grouped.set(key, { names: [phase ?? miss.metric], miss });
+    }
+    const misses = [...grouped.values()].map(({ names, miss }) => {
+      const name = miss.metric.startsWith("input.") ? `input ${names.join("/")}` : miss.metric;
+      return `${name} ${formatNumber(miss.value)}${unitOf(miss.metric)} > ${miss.target}`;
+    });
+    out.push(`  ${yellow("!")} ${padEnd(label(r), width)}   ${misses.join(dim(" · "))}`);
+  }
+  out.push("");
+  return out;
+}
+
+/** Budgets a recording now would lower: `-u` applies them, and they can't go back up without ZS_ALLOW_WORSE. */
+function tighterNote(results: ScenarioResult[]): string[] {
+  const tighter = results.filter((r) => r.tighter && metricNames(r.tighter).length);
+  if (!tighter.length) return [];
+  const out = [`  ${green("Can tighten")} ${dim("(faster than when recorded: npx playwright test -u keeps the gain)")}`];
+  const width = Math.max(...tighter.map((r) => [...label(r)].length));
+  for (const r of tighter) {
+    const limits = metricNames(r.tighter!).map((m) => `${m} ${formatNumber(r.budget?.[m] ?? 0)} → ${formatNumber(r.tighter![m]!)}`);
+    out.push(`  ${green("↓")} ${padEnd(label(r), width)}   ${limits.join(dim(" · "))}`);
+  }
+  out.push("");
+  return out;
+}
+
 /** One table per kind of scenario at the end of the run, details of the failures, and a JSON of it all. */
 export default class ZeroSpikesReporter implements Reporter {
   private readonly results: ScenarioResult[] = [];
@@ -253,6 +293,8 @@ export default class ZeroSpikesReporter implements Reporter {
     if (count("recorded")) parts.push(yellow(`${count("recorded")} budgets recorded`));
     if (count("updated")) parts.push(yellow(`${count("updated")} budgets updated`));
     if (count("unchecked")) parts.push(yellow(`${count("unchecked")} with budgets from another machine`));
+    const overTarget = this.results.filter((r) => r.overTarget?.length).length;
+    if (overTarget) parts.push(yellow(`${overTarget} over target`));
 
     const lines = ["", `  ${bold("zerospikes")}  ${parts.join(dim(" · "))}`, ""];
     const interactions = this.results.filter((r) => r.kind === "interaction");
@@ -262,7 +304,7 @@ export default class ZeroSpikesReporter implements Reporter {
     if (memory.length) tables.push(layout("Memory", memory, MEMORY));
     lines.push(...render(tables, termWidth));
     for (const r of this.results.filter((x) => x.status === "fail")) lines.push(...failureDetail(r), "");
-    lines.push(...otherMachineNote(this.results));
+    lines.push(...targetNote(this.results), ...tighterNote(this.results), ...otherMachineNote(this.results));
 
     const dir = join(this.rootDir, this.options.outputDir ?? "zerospikes-results");
     mkdirSync(dir, { recursive: true });

@@ -1,44 +1,31 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { SLACK, TARGETS, TIGHTEN_MIN_GAIN } from "./defaults.js";
 import { environmentId, type Environment } from "./environment.js";
 import { metricNames } from "./stats.js";
-import type { MetricName, Metrics, Violation } from "./types.js";
-
-/** One display frame at 60 Hz. */
-const FRAME_MS = 17;
+import type { MetricName, Metrics, TargetMiss, Violation } from "./types.js";
 
 /**
- * CPU time isn't quantized to display frames and holds still on a busy machine,
- * so its slack is proportional, with a floor for the millisecond or two of
- * noise that light interactions show. The ratio covers how much a scenario's
- * CPU time moves from one browser session to the next (up to about ±20% on the
- * example), which is far more than its runs within one session vary.
+ * Turns the worst value seen while recording into a budget, with the room
+ * `SLACK` leaves for session-to-session noise. `frameMs` is the display frame
+ * measured while recording: frame and input times move by whole frames.
  */
-const CPU_SLACK_RATIO = 1.35;
-const CPU_SLACK_FLOOR_MS = 3;
-
-/**
- * Turns a measured value into a budget with room for run-to-run noise. Frame
- * and latency times are quantized to display frames and can land a frame early
- * or late on a busy machine, so the slack is at least two frames; counts and
- * memory get their own floors.
- */
-export function deriveLimit(metric: MetricName, value: number): number {
+export function deriveLimit(metric: MetricName, value: number, frameMs: number): number {
   const v = Math.max(0, value);
   switch (metric) {
     case "memory.heapMB":
-      return Math.ceil(Math.max(v * 1.25, v + 2));
+      return Math.ceil(Math.max(v * SLACK.heapRatio, v + SLACK.heapMB));
     case "memory.nodes":
-      return Math.ceil(v + 50);
+      return Math.ceil(v + SLACK.nodes);
     case "memory.listeners":
-      return Math.ceil(v + 5);
+      return Math.ceil(v + SLACK.listeners);
     case "cpu.main":
-      return Math.ceil(Math.max(v * CPU_SLACK_RATIO, v + CPU_SLACK_FLOOR_MS));
+      return Math.ceil(Math.max(v * SLACK.cpuRatio, v + SLACK.cpuMs));
     case "frame.slow":
     case "frame.long":
-      return Math.ceil(v * 1.5) + 2;
+      return Math.ceil(v * SLACK.timeRatio) + SLACK.countExtra;
     default:
-      return Math.ceil(Math.max(v * 1.5, v + 2 * FRAME_MS));
+      return Math.ceil(Math.max(v * SLACK.timeRatio, v + SLACK.timeFrames * frameMs));
   }
 }
 
@@ -49,9 +36,36 @@ export function unitOf(metric: MetricName): string {
   return " ms";
 }
 
-export function deriveBudget(metrics: Metrics): Metrics {
+export function deriveBudget(worst: Metrics, frameMs: number): Metrics {
   const out: Metrics = {};
-  for (const name of metricNames(metrics)) out[name] = deriveLimit(name, metrics[name]!);
+  for (const name of metricNames(worst)) out[name] = deriveLimit(name, worst[name]!, frameMs);
+  return out;
+}
+
+/** Each metric's lower limit of the two, so recording again can only tighten a budget. */
+export function tighten(stored: Metrics, derived: Metrics): Metrics {
+  const out: Metrics = { ...derived };
+  for (const name of metricNames(stored)) out[name] = Math.min(stored[name]!, derived[name] ?? Infinity);
+  return out;
+}
+
+/** The limits a budget recorded now would lower by more than `TIGHTEN_MIN_GAIN`, at their new value. */
+export function tighterLimits(stored: Metrics, derived: Metrics): Metrics {
+  const out: Metrics = {};
+  for (const name of metricNames(stored)) {
+    const next = derived[name];
+    if (next !== undefined && next < stored[name]! * (1 - TIGHTEN_MIN_GAIN)) out[name] = next;
+  }
+  return out;
+}
+
+/** Metrics over their `TARGETS`. */
+export function overTargets(metrics: Metrics): TargetMiss[] {
+  const out: TargetMiss[] = [];
+  for (const metric of metricNames(metrics)) {
+    const target = TARGETS[metric];
+    if (target !== undefined && metrics[metric]! > target) out.push({ metric, value: metrics[metric]!, target });
+  }
   return out;
 }
 

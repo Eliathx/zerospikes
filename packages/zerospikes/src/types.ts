@@ -84,6 +84,13 @@ export interface Violation {
   source: "budget" | "fixed";
 }
 
+/** A metric over the value it should stay under to feel smooth (`TARGETS`): a warning, not a failure. */
+export interface TargetMiss {
+  metric: MetricName;
+  value: number;
+  target: number;
+}
+
 /** What the main thread's CPU time went into, in ms. Tasks also hold work none of these name (paint, GC, input). */
 export interface CpuBreakdown {
   scriptMs: number;
@@ -112,6 +119,10 @@ export interface ScenarioResult {
    */
   status: "pass" | "fail" | "recorded" | "updated" | "measured" | "unchecked";
   violations: Violation[];
+  /** Metrics over their target. Reported, never failed for. */
+  overTarget?: TargetMiss[];
+  /** Limits that recording now would lower by more than 10%, at their new value: `-u` applies them. */
+  tighter?: Metrics;
   /** Where the scenario ran. */
   environment?: Environment;
   /** For `unchecked`: what differs from where the budget was recorded, as `field: recorded → current`. */

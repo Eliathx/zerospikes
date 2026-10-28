@@ -13,7 +13,8 @@
     "perf:history": "zerospikes history",
     "perf:reliability": "node scripts/reliability.mjs",
     "perf:sensitivity": "node scripts/sensitivity.mjs",
-    "perf:compare-reliability": "node scripts/compare-reliability.mjs"
+    "perf:compare-reliability": "node scripts/compare-reliability.mjs",
+    "perf:calibrate": "node scripts/calibrate-slack.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",

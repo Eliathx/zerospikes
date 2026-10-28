@@ -1,6 +1,7 @@
 import { test as base, expect, type CDPSession, type Page, type TestInfo } from "@playwright/test";
 import { writeFileSync } from "node:fs";
-import { BudgetStore, check, deriveBudget, unitOf, validateLimits } from "./budgets.js";
+import { BudgetStore, check, deriveBudget, overTargets, tighten, tighterLimits, unitOf, validateLimits } from "./budgets.js";
+import { FALLBACK_FRAME_MS } from "./defaults.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
 import { describeEnvironment, displayRateOf, environmentDifferences, type Environment } from "./environment.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
@@ -20,6 +21,8 @@ import {
 } from "./types.js";
 
 export type * from "./types.js";
+export { SLACK, TARGETS } from "./defaults.js";
+export { deriveBudget } from "./budgets.js";
 export { expect };
 
 type Point = [x: number, y: number];
@@ -88,7 +91,8 @@ export class ZeroSpikes {
     // Headed frames follow the display: its rate is part of where frame times were measured.
     const environment =
       this.environment.headless || !frameGaps.length ? this.environment : { ...this.environment, displayHz: displayRateOf(median(frameGaps)) };
-    const result = this.decide("interaction", name, metrics, worstOf(perRun), environment, opts.budget);
+    const frameMs = frameGaps.length ? median(frameGaps) : FALLBACK_FRAME_MS;
+    const result = this.decide("interaction", name, metrics, worstOf(perRun), frameMs, environment, opts.budget);
     result.runs = perRun;
     if (cpuPerRun.length) {
       result.cpu = {
@@ -147,7 +151,7 @@ export class ZeroSpikes {
       "memory.listeners": last.listeners - first.listeners,
     };
     if (opts.budget) validateLimits(name, opts.budget, MEMORY_METRICS, metrics);
-    const result = this.decide("memory", name, metrics, metrics, this.environment, opts.budget);
+    const result = this.decide("memory", name, metrics, metrics, FALLBACK_FRAME_MS, this.environment, opts.budget);
     result.samples = samples;
     return this.finish(result);
   }
@@ -186,68 +190,87 @@ export class ZeroSpikes {
   }
 
   /**
-   * Compares `metrics` with the recorded budget, recording or updating it as
-   * `-u` / `ZS_UPDATE` say. New budgets are derived from `worst`, so they
-   * already cover the run-to-run spread seen while recording. A budget
-   * recorded on another machine is no limit here: it isn't compared, unless
-   * `-u` records this machine's or `ZS_ANY_MACHINE` asks to compare anyway.
+   * Compares `metrics` with the recorded budget, recording it as `-u` /
+   * `ZS_UPDATE` say. New budgets are derived from `worst`, so they already
+   * cover the run-to-run spread seen while recording.
+   *
+   * Recording again only tightens: each limit keeps the lower of the stored
+   * and the new one, so a scenario that got faster keeps that, and one that
+   * got slower still fails. `ZS_ALLOW_WORSE` accepts the new numbers whatever
+   * they are, for a change that is slower on purpose.
+   *
+   * A budget recorded on another machine is no limit here: it isn't compared,
+   * unless `-u` records this machine's or `ZS_ANY_MACHINE` asks to compare anyway.
    */
   private decide(
     kind: ScenarioResult["kind"],
     name: string,
     metrics: Metrics,
     worst: Metrics,
+    frameMs: number,
     environment: Environment,
     fixed?: Metrics,
   ): ScenarioResult {
     const test = this.testInfo.titlePath.slice(1).join(" › ");
     const project = this.testInfo.project.name || "default";
     const key = `${project} › ${test} › ${name}`;
-    const base = { kind, key, test, name, project, metrics, environment };
+    const overTarget = overTargets(metrics);
+    const base = { kind, key, test, name, project, metrics, environment, ...(overTarget.length ? { overTarget } : {}) };
     if (inCompareSession()) return { ...base, budget: null, status: "measured", violations: [] };
     const mode = process.env.ZS_UPDATE ? "all" : this.testInfo.config.updateSnapshots;
+    const updating = mode === "all" || mode === "changed";
     const stored = this.store.get(key);
     const otherMachine =
       stored?.environment && !process.env.ZS_ANY_MACHINE ? environmentDifferences(stored.environment, environment) : [];
+    const derived = deriveBudget(worst, frameMs);
     let budget: Metrics | null = stored?.budget ?? null;
     let status: ScenarioResult["status"];
     let violations: Violation[] = [];
+    let tighter: Metrics = {};
 
-    if (!stored) {
+    if (!stored || (updating && otherMachine.length)) {
+      // A first budget, or this machine's own in place of another's: nothing of its own to tighten.
       if (mode === "none") {
         status = "pass";
       } else {
-        budget = deriveBudget(worst);
+        budget = derived;
         this.store.set(key, budget, environment);
-        status = "recorded";
+        status = stored ? "updated" : "recorded";
       }
-    } else if (otherMachine.length && mode !== "all" && mode !== "changed") {
+    } else if (otherMachine.length) {
       status = "unchecked";
+    } else if (updating) {
+      const next = process.env.ZS_ALLOW_WORSE ? derived : tighten(stored.budget, derived);
+      const changed = metricNames(next).some((metric) => next[metric] !== stored.budget[metric]);
+      if (changed) this.store.set(key, next, environment);
+      budget = next;
+      violations = check(metrics, next, "budget");
+      status = violations.length ? "fail" : changed ? "updated" : "pass";
     } else {
       violations = check(metrics, stored.budget, "budget");
-      if (mode === "all" || (mode === "changed" && (violations.length || otherMachine.length))) {
-        budget = deriveBudget(worst);
-        this.store.set(key, budget, environment);
-        violations = [];
-        status = "updated";
-      } else {
-        // A metric seen for the first time (a new input phase) gets a budget without failing.
-        const added = metricNames(metrics).filter((name: MetricName) => !(name in stored.budget));
-        if (added.length && mode !== "none") {
-          const derived = deriveBudget(worst);
-          budget = { ...stored.budget };
-          for (const metric of added) budget[metric] = derived[metric];
-          this.store.set(key, budget, stored.environment ?? environment);
-        }
-        status = violations.length ? "fail" : "pass";
+      // A metric seen for the first time (a new input phase) gets a budget without failing.
+      const added = metricNames(metrics).filter((metric: MetricName) => !(metric in stored.budget));
+      if (added.length && mode !== "none") {
+        budget = { ...stored.budget };
+        for (const metric of added) budget[metric] = derived[metric];
+        this.store.set(key, budget, stored.environment ?? environment);
       }
+      status = violations.length ? "fail" : "pass";
+      if (!violations.length) tighter = tighterLimits(stored.budget, derived);
     }
     if (fixed) {
       const over = check(metrics, fixed, "fixed");
       violations.push(...over);
       if (over.length) status = "fail";
     }
-    return { ...base, budget, status, violations, ...(status === "unchecked" ? { otherMachine } : {}) };
+    return {
+      ...base,
+      budget,
+      status,
+      violations,
+      ...(metricNames(tighter).length ? { tighter } : {}),
+      ...(status === "unchecked" ? { otherMachine } : {}),
+    };
   }
 
   private async finish(result: ScenarioResult): Promise<ScenarioResult> {
@@ -285,7 +308,7 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   if (r.samples) lines.push("", `  per cycle: ${r.samples.map((s) => `${s.heapMB} MB / ${s.domNodes} nodes`).join(" → ")}`);
   if (r.profilePath) lines.push("", `  CPU profile: ${r.profilePath}  (DevTools › Performance › Load profile)`);
   if (r.violations.some((v) => v.source === "budget")) {
-    lines.push(`  budgets: ${budgetPath}. If the change is intended: npx playwright test -u`);
+    lines.push(`  budgets: ${budgetPath}. If it is slower on purpose: ZS_ALLOW_WORSE=1 npx playwright test -u`);
   }
   return lines.join("\n");
 }

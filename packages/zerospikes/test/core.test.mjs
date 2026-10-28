@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { aggregate, median, quantile, runMetrics, worstOf } from "../dist/stats.js";
-import { BudgetStore, check, deriveLimit, validateLimits } from "../dist/budgets.js";
+import { BudgetStore, check, deriveLimit, overTargets, tighten, tighterLimits, validateLimits } from "../dist/budgets.js";
 import { INTERACTION_METRICS } from "../dist/types.js";
 
 test("runMetrics turns frame timestamps and inputs into per-phase numbers", () => {
@@ -47,17 +47,39 @@ test("median and quantile", () => {
   assert.equal(quantile([], 0.95), 0);
 });
 
-test("derived limits leave at least two frames of slack", () => {
-  assert.equal(deriveLimit("frame.max", 16.7), 51);
-  assert.equal(deriveLimit("frame.max", 200), 300);
-  assert.equal(deriveLimit("memory.heapMB", -0.4), 2);
-  assert.equal(deriveLimit("memory.nodes", 0), 50);
-  assert.equal(deriveLimit("frame.slow", 0), 2);
+test("derived time limits leave two measured frames, or 60% on heavy interactions", () => {
+  assert.equal(deriveLimit("frame.max", 6.2, 6.2), 19);
+  assert.equal(deriveLimit("frame.max", 16.7, 16.7), 51);
+  assert.equal(deriveLimit("input.click", 200, 16.7), 320);
+  assert.equal(deriveLimit("frame.slow", 0, 16.7), 1);
+  assert.equal(deriveLimit("frame.long", 2, 16.7), 5);
+  assert.equal(deriveLimit("memory.heapMB", -0.4, 16.7), 2);
+  assert.equal(deriveLimit("memory.nodes", 0, 16.7), 50);
 });
 
 test("cpu.main slack is proportional, with a floor for light interactions", () => {
-  assert.equal(deriveLimit("cpu.main", 4), 7);
-  assert.equal(deriveLimit("cpu.main", 100), 135);
+  assert.equal(deriveLimit("cpu.main", 4, 16.7), 16);
+  assert.equal(deriveLimit("cpu.main", 100, 16.7), 145);
+});
+
+test("recording again only lowers limits, and keeps ones the scenario didn't produce this time", () => {
+  const stored = { "frame.max": 40, "input.click": 30, "input.key": 20 };
+  assert.deepEqual(tighten(stored, { "frame.max": 25, "input.click": 45, "frame.slow": 1 }), {
+    "frame.max": 25,
+    "input.click": 30,
+    "input.key": 20,
+    "frame.slow": 1,
+  });
+});
+
+test("tighterLimits names only limits that would drop by more than 10%", () => {
+  assert.deepEqual(tighterLimits({ "frame.max": 40, "input.click": 30 }, { "frame.max": 37, "input.click": 20 }), { "input.click": 20 });
+});
+
+test("overTargets warns about frames and inputs over 50 ms, not about counts or CPU", () => {
+  assert.deepEqual(overTargets({ "frame.max": 72, "input.click": 50, "cpu.main": 300, "frame.long": 3 }), [
+    { metric: "frame.max", value: 72, target: 50 },
+  ]);
 });
 
 test("check reports only metrics over their limit", () => {
