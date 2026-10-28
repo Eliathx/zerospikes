@@ -21,6 +21,9 @@ export interface IndexedScenario {
   status: ScenarioResult["status"];
   metrics: Metrics;
   budget: Metrics | null;
+  /** As in `ScenarioResult`: what the history view needs to tighten a budget from this run. */
+  tighter?: Metrics;
+  budgetFile?: string;
 }
 
 export interface IndexedRun {
@@ -94,7 +97,10 @@ function writeAtomically(path: string, data: string | Buffer): void {
 
 function indexEntryOf(run: Run, file: string): IndexedRun {
   const scenarios: Record<string, IndexedScenario> = {};
-  for (const result of run.results) scenarios[result.key] = { status: result.status, metrics: result.metrics, budget: result.budget };
+  for (const result of run.results) {
+    const { status, metrics, budget, tighter, budgetFile } = result;
+    scenarios[result.key] = { status, metrics, budget, ...(tighter ? { tighter } : {}), ...(budgetFile ? { budgetFile } : {}) };
+  }
   return { date: run.date, git: run.git, file, scenarios };
 }
 

@@ -1,26 +1,32 @@
 import { unitOf } from "./budgets.js";
+import { TARGETS } from "./defaults.js";
 import type { IndexedRun, IndexedScenario } from "./history.js";
-import { bold, dim, formatNumber, green, MARK, padEnd, padStart, red, sparkline, truncate } from "./terminal.js";
-import type { MetricName } from "./types.js";
+import { metricNames } from "./stats.js";
+import { bold, cyan, dim, formatNumber, green, hasColor, highlight, padEnd, padStart, red, sparkline, STATUS_WORD, treeLine, truncate, visibleWidth, yellow, type Paint } from "./terminal.js";
+import type { MetricName, Metrics } from "./types.js";
 
-/** Runs a trend covers. */
-export const TREND_RUNS = 30;
-/** Smaller run-to-run changes are noise, so they aren't coloured. Same threshold as `zerospikes compare`. */
+/** A trend that spreads less than this is drawn flat: noise. Same threshold as `zerospikes compare`. */
 const NOTICEABLE_CHANGE = 0.1;
-const RECENT_RUNS = 10;
 const SHORT_COMMIT_LENGTH = 7;
-/** Metrics a scenario is summed up by, when it has them. */
-const MAIN_METRICS: MetricName[] = ["cpu.main", "frame.max", "memory.heapMB"];
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const COLUMN_GAP = "  ";
-/** Every line starts this far in; the selected one puts its marker there. */
+/** Every line starts this far in. */
 const INDENT = "    ";
-const SELECTED = `  ${bold("›")} `;
+/** The selected line stands out by its background; without colours, a plain `>` in the indent does it. */
+const SELECTED = hasColor ? INDENT : "  > ";
 const MIN_FIRST_COLUMN_WIDTH = 10;
-/** Past this, the detail view's tables only spread their columns apart. */
-const DETAIL_MAX_WIDTH = 100;
+/** The fewest runs a narrow terminal shows a trend over, before the scenario names give way instead. */
+const MIN_TREND_RUNS = 10;
+/** Statuses whose run was checked against its budget, so counting the metrics within it means something. */
+const CHECKED: IndexedScenario["status"][] = ["pass", "fail", "updated"];
+/** `Oct 28, 10:27`, the dates in DATE_FORMAT. */
+const DATE_WIDTH = 13;
+/** Where the branch sits in a table of runs: the column that gives way when the terminal is narrow. */
+const BRANCH_COLUMN = 2;
+/** Enough of a branch name to tell `main` from `feat…` in an 80-column terminal. */
+const MIN_BRANCH_WIDTH = 4;
 const DATE_FORMAT: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false };
 
 export interface ScenarioHistory {
@@ -29,21 +35,21 @@ export interface ScenarioHistory {
   entries: { run: IndexedRun; scenario: IndexedScenario }[];
 }
 
-/** Every scenario in `runs`, sorted by key. */
+/**
+ * Every scenario in `runs`, by key: first those the latest run measured, then
+ * the ones it didn't (removed from the suite, or left out by a --grep).
+ */
 export function scenarioHistories(runs: IndexedRun[]): ScenarioHistory[] {
   const byKey = new Map<string, ScenarioHistory["entries"]>();
   for (const run of runs) {
     for (const [key, scenario] of Object.entries(run.scenarios)) byKey.set(key, [...(byKey.get(key) ?? []), { run, scenario }]);
   }
-  return [...byKey].sort(([a], [b]) => a.localeCompare(b)).map(([key, entries]) => ({ key, entries }));
+  const latest = runs.at(-1);
+  const notInLatest = (key: string) => Number(latest !== undefined && !(key in latest.scenarios));
+  return [...byKey].sort(([a], [b]) => notInLatest(a) - notInLatest(b) || a.localeCompare(b)).map(([key, entries]) => ({ key, entries }));
 }
 
 export const branchesOf = (runs: IndexedRun[]) => [...new Set(runs.flatMap((run) => (run.git?.branch ? [run.git.branch] : [])))].sort();
-
-export function mainMetric(scenario: IndexedScenario): MetricName {
-  const metrics = Object.keys(scenario.metrics) as MetricName[];
-  return MAIN_METRICS.find((metric) => metrics.includes(metric)) ?? metrics[0];
-}
 
 export function relativeTime(iso: string, now = Date.now()): string {
   const elapsed = now - Date.parse(iso);
@@ -57,22 +63,38 @@ const shortCommit = (run: IndexedRun) => (run.git ? run.git.commit.slice(0, SHOR
 
 const withUnit = (value: number | undefined, metric: MetricName) => (value === undefined ? "—" : `${formatNumber(value)}${unitOf(metric)}`);
 
-/** The change from `previous` as a signed percentage, red when worse by more than noise, green when better. */
-export function formatChange(current: number | undefined, previous: number | undefined): string {
-  if (current === undefined || !previous) return dim("—");
-  const change = (current - previous) / previous;
-  const text = `${change >= 0 ? "+" : ""}${Math.round(change * 100)}%`;
-  if (change > NOTICEABLE_CHANGE) return red(text);
-  if (change < -NOTICEABLE_CHANGE) return green(text);
-  return dim(text);
+/**
+ * The colour of one run in a trend, as the rest of the view uses them: red
+ * over the budget it was checked against (it failed on this metric), yellow
+ * within it but over the metric's target (it passes, and lags), green within
+ * both. Dim for a run that wasn't checked against a budget.
+ */
+function paintOf(scenario: IndexedScenario, metric: MetricName): Paint {
+  const value = scenario.metrics[metric]!;
+  const limit = scenario.budget?.[metric];
+  const target = TARGETS[metric];
+  if (limit === undefined || !CHECKED.includes(scenario.status)) return dim;
+  if (value > limit) return red;
+  return target !== undefined && value > target ? yellow : green;
 }
 
-function trendOf(history: ScenarioHistory, metric: MetricName): string {
-  const values = history.entries
-    .slice(-TREND_RUNS)
-    .map(({ scenario }) => scenario.metrics[metric])
-    .filter((value): value is number => value !== undefined);
-  return sparkline(values, NOTICEABLE_CHANGE);
+/** A run's value of `metric`, red or yellow like its block in a trend, plain when it's fine. */
+function shownValue(scenario: IndexedScenario, metric: MetricName, unit = true): string {
+  const value = scenario.metrics[metric];
+  const shown = unit ? withUnit(value, metric) : value === undefined ? "—" : formatNumber(value);
+  if (scenario.metrics[metric] === undefined) return shown;
+  const paint = paintOf(scenario, metric);
+  return paint === red || paint === yellow ? paint(shown) : shown;
+}
+
+/** One block per run of `entries` that measured `metric`: height for the trend, colour for how each run did. */
+function trendLine(entries: ScenarioHistory["entries"], metric: MetricName): string {
+  const measured = entries.filter(({ scenario }) => scenario.metrics[metric] !== undefined);
+  return sparkline(
+    measured.map(({ scenario }) => scenario.metrics[metric]!),
+    NOTICEABLE_CHANGE,
+    measured.map(({ scenario }) => paintOf(scenario, metric)),
+  );
 }
 
 const PROJECT_SEPARATOR = " › ";
@@ -84,19 +106,19 @@ function labelsOf(histories: ScenarioHistory[]): string[] {
   return histories.map((history) => history.key.split(PROJECT_SEPARATOR).slice(1).join(PROJECT_SEPARATOR));
 }
 
-function valueAt(history: ScenarioHistory, fromEnd: number, metric: MetricName) {
-  return history.entries.at(-fromEnd)?.scenario.metrics[metric];
-}
-
-/** Lays out rows of cells as columns; the first column takes whatever width the others leave. */
-function table(rows: string[][], widths: number[], width: number, alignRight: boolean[]): string[] {
-  const fixed = widths.slice(1).reduce((total, w) => total + w + COLUMN_GAP.length, 0);
-  const first = Math.max(MIN_FIRST_COLUMN_WIDTH, width - fixed - INDENT.length);
+/**
+ * Lays out rows of cells as columns. Column `flexible` (the first, unless
+ * told) takes whatever width the others leave, at least `minFlexible`, and is
+ * cut short to fit it.
+ */
+function table(rows: string[][], widths: number[], width: number, alignRight: boolean[], flexible = 0, minFlexible = MIN_FIRST_COLUMN_WIDTH): string[] {
+  const fixed = widths.reduce((total, w, i) => (i === flexible ? total : total + w + COLUMN_GAP.length), 0);
+  const rest = Math.max(minFlexible, width - fixed - INDENT.length);
   return rows.map((cells) =>
     cells
       .map((cell, i) => {
-        const columnWidth = i === 0 ? first : widths[i];
-        const fitted = i === 0 ? truncate(cell, columnWidth) : cell;
+        const columnWidth = i === flexible ? rest : widths[i];
+        const fitted = i === flexible ? truncate(cell, columnWidth) : cell;
         return alignRight[i] ? padStart(fitted, columnWidth) : padEnd(fitted, columnWidth);
       })
       .join(COLUMN_GAP),
@@ -110,59 +132,157 @@ export function header(runs: IndexedRun[], branch: string | undefined): string {
   return `  ${bold("zerospikes history")}  ${dim(`${count} · ${branch ?? "all branches"} · ${where}`)}`;
 }
 
-/** Each scenario's latest status and its main metric's last value, change and trend. */
-export function scenarioList(histories: ScenarioHistory[], selected: number, width: number): string[] {
-  const labels = labelsOf(histories);
-  const rows = histories.map((history, i) => {
-    const latest = history.entries.at(-1)!.scenario;
-    const metric = mainMetric(latest);
-    const last = valueAt(history, 1, metric);
-    return [labels[i], MARK[latest.status], metric, withUnit(last, metric), formatChange(last, valueAt(history, 2, metric)), trendOf(history, metric)];
-  });
-  const head = ["Scenario", "Status", "Metric", "Last", "Δ", `Last ${TREND_RUNS} runs`];
-  const lines = table([head, ...rows], [0, 8, 13, 10, 7, TREND_RUNS], width, [false, false, false, true, true, false]);
-  return [dim(INDENT + lines[0]), ...lines.slice(1).map((line, i) => (i === selected ? SELECTED : INDENT) + line)];
-}
+/** Marks a scenario, or a metric, whose budget can be lowered. */
+const LOWER_MARK = "↓";
+/** Past this, the scenario list only pushes its status away from the names. */
+const LIST_MAX_WIDTH = 100;
 
-/** Every metric of one scenario with its trend, then its recent runs for the selected metric. */
-export function scenarioDetail(history: ScenarioHistory, selectedMetric: number, width: number): string[] {
+/**
+ * A scenario's metrics in its latest run, as a tree under its row: each value
+ * coloured as in its trend, against `budget` (the budget now, or that run's),
+ * and `LOWER_MARK` on the ones in `lowerable`.
+ */
+function metricTree(history: ScenarioHistory, budget: Metrics | null | undefined, lowerable: Metrics): string[] {
   const latest = history.entries.at(-1)!.scenario;
   const metrics = Object.keys(latest.metrics) as MetricName[];
-  const metric = metrics[Math.min(selectedMetric, metrics.length - 1)];
-  const metricRows = metrics.map((m) => {
-    const last = valueAt(history, 1, m);
-    return [m, withUnit(last, m), withUnit(latest.budget?.[m], m), formatChange(last, valueAt(history, 2, m)), trendOf(history, m)];
+  // The unit once, after the budget: `0.2 / 3 MB`, with every column lined up across the tree.
+  const values = metrics.map((metric) => shownValue(latest, metric, false));
+  const limits = metrics.map((metric) => (budget?.[metric] === undefined ? "—" : formatNumber(budget[metric]!)));
+  const units = metrics.map((metric) => unitOf(metric).trim());
+  const widest = (cells: string[]) => Math.max(...cells.map((cell) => visibleWidth(cell)));
+  return metrics.map((metric, i) => {
+    const branch = treeLine(i === metrics.length - 1 ? "└" : "├");
+    const limit = padStart(limits[i], widest(limits)) + (units[i] ? ` ${units[i]}` : "");
+    const mark = lowerable[metric] !== undefined ? ` ${cyan(LOWER_MARK)}` : "";
+    return `${INDENT}  ${branch} ${padEnd(metric, widest(metrics))}  ${padStart(values[i], widest(values))} ${dim("/")} ${limit}${mark}`;
   });
-  const metricLines = table(
-    [["Metric", "Last", "Budget", "Δ", `Last ${TREND_RUNS} runs`], ...metricRows],
-    [0, 10, 10, 7, TREND_RUNS],
-    Math.min(width, DETAIL_MAX_WIDTH),
-    [false, true, true, true, false],
-  );
-  const runRows = history.entries
-    .slice(-RECENT_RUNS)
-    .reverse()
-    .map(({ run, scenario }) => {
-      const value = scenario.metrics[metric];
-      const limit = scenario.budget?.[metric];
-      const shown = withUnit(value, metric);
-      return [new Date(run.date).toLocaleString("en", DATE_FORMAT), shortCommit(run), run.git?.branch ?? "—", MARK[scenario.status], value !== undefined && limit !== undefined && value > limit ? red(shown) : shown];
-    });
-  const runLines = table([["Date", "Commit", "Branch", "Status", metric], ...runRows], [0, 9, 16, 8, 12], Math.min(width, DETAIL_MAX_WIDTH), [
-    false,
-    false,
-    false,
-    false,
-    true,
-  ]);
+}
+
+/**
+ * Each scenario with its latest status and how many metrics stayed within
+ * budget. Scenarios with metrics in `lowerable` (by key) get `LOWER_MARK`
+ * after their status; the ones in `expanded` show their metrics in a tree
+ * under them, against `budgets` (the budgets now, by key). A scenario the
+ * latest run didn't measure is greyed, with when it last ran in place of a
+ * status that is no longer news.
+ */
+export function scenarioList(
+  histories: ScenarioHistory[],
+  selected: number,
+  width: number,
+  lowerable = new Map<string, Metrics>(),
+  budgets = new Map<string, Metrics | undefined>(),
+  expanded = new Set<string>(),
+): string[] {
+  const labels = labelsOf(histories);
+  const lastRun = histories.reduce((date, history) => (history.entries.at(-1)!.run.date > date ? history.entries.at(-1)!.run.date : date), "");
+  const stale = histories.map((history) => history.entries.at(-1)!.run.date !== lastRun);
+  const canLower = (key: string) => metricNames(lowerable.get(key) ?? {}).length > 0;
+  const rows = histories.map((history, i) => {
+    const { run, scenario: latest } = history.entries.at(-1)!;
+    if (stale[i]) return [labels[i], relativeTime(run.date)];
+    return [labels[i], canLower(history.key) ? `${statusOf(latest)} ${cyan(LOWER_MARK)}` : statusOf(latest)];
+  });
+  // Wide enough for `UPDATED 12/12 ↓`.
+  const lines = table([["Scenario", "Status"], ...rows], [0, 15], Math.min(width, LIST_MAX_WIDTH), [false, false]);
   return [
-    `  ${bold(history.key)}  ${MARK[latest.status]}`,
+    dim(INDENT + lines[0]),
+    ...lines.slice(1).flatMap((line, i) => {
+      const history = histories[i];
+      // Greyed whole, after the name is cut to fit: greying the name first could cut it inside its colour code.
+      const shown = stale[i] ? dim(line) : line;
+      const row = i === selected ? highlight(SELECTED + shown) : INDENT + shown;
+      if (!expanded.has(history.key)) return [row];
+      return [row, ...metricTree(history, budgets.get(history.key) ?? history.entries.at(-1)!.scenario.budget, lowerable.get(history.key) ?? {})];
+    }),
+  ];
+}
+
+/**
+ * A scenario's status in a run and how many of its metrics stayed within their
+ * budget, as `FAIL 5/6`: the count green when all did, red otherwise, so a
+ * failure says how far it went. Just the status for a run that wasn't checked
+ * against a budget (`NEW`, `SKIP`).
+ */
+function statusOf(scenario: IndexedScenario): string {
+  const word = STATUS_WORD[scenario.status];
+  const budget = scenario.budget;
+  if (!budget || !CHECKED.includes(scenario.status)) return word;
+  const checked = (Object.keys(budget) as MetricName[]).filter((metric) => scenario.metrics[metric] !== undefined);
+  const within = checked.filter((metric) => scenario.metrics[metric]! <= budget[metric]!).length;
+  const count = `${within}/${checked.length}`;
+  return `${word} ${within === checked.length ? green(count) : red(count)}`;
+}
+
+/** A metric's name, last value and budget now: the metrics pane's columns. */
+const METRIC_COLUMNS = [16, 9, 9];
+/** After the budget: ` ↓ `, the mark one space from it and one from the pane's edge. */
+const MARK_ROOM = 3;
+/** The metrics pane's width: its columns, the gaps between them, the indent before and the mark after. */
+export const METRICS_PANE_WIDTH = INDENT.length + METRIC_COLUMNS.reduce((total, w) => total + w, 0) + COLUMN_GAP.length * (METRIC_COLUMNS.length - 1) + MARK_ROOM;
+/** Lines above a pane's rows that stay put while the rows scroll: the runs' title, a blank, the column titles. */
+export const PANE_HEADER_LINES = 3;
+
+/**
+ * The scenario view's title: its key and its latest status, as in the list.
+ */
+export const scenarioTitle = (history: ScenarioHistory) => `  ${bold(history.key)}  ${statusOf(history.entries.at(-1)!.scenario)}`;
+
+/** The line of a pane's selected row: highlighted when the pane has the focus, faintly when not. */
+function selectedLine(line: string, width: number, focused: boolean): string {
+  return highlight(padEnd(SELECTED + line, width), !focused);
+}
+
+/**
+ * The left pane of a scenario: each metric with its latest value, coloured as
+ * in its trend, its budget now and `LOWER_MARK` when it can be lowered.
+ * `budget` is the budget now, when it changed since the latest run; by
+ * default, that run's.
+ */
+export function metricsPane(
+  history: ScenarioHistory,
+  selectedMetric: number,
+  focused: boolean,
+  budget?: Metrics | null,
+  lowerable: Metrics = {},
+): string[] {
+  const latest = history.entries.at(-1)!.scenario;
+  const budgetNow = budget ?? latest.budget;
+  const metrics = Object.keys(latest.metrics) as MetricName[];
+  const rows = metrics.map((m) => [m, shownValue(latest, m), withUnit(budgetNow?.[m], m)]);
+  const [head, ...cells] = table([["Metric", "Last", "Budget"], ...rows], METRIC_COLUMNS, METRICS_PANE_WIDTH - MARK_ROOM, [false, true, true]);
+  const lines = cells.map((line, i) => (lowerable[metrics[i]] !== undefined ? `${line} ${cyan(LOWER_MARK)}` : line));
+  const selected = Math.min(selectedMetric, metrics.length - 1);
+  return [
+    dim(INDENT + head),
+    ...lines.map((line, i) => (i === selected ? selectedLine(line, METRICS_PANE_WIDTH, focused) : INDENT + line)),
+  ];
+}
+
+/**
+ * The right pane of a scenario: every run of one metric, newest first, under
+ * its trend across them. Each row has the value, coloured as in the trend, and
+ * the budget that run was checked against. A narrow pane cuts the branch name
+ * short, the one column of any length.
+ */
+export function runsPane(history: ScenarioHistory, metric: MetricName, selectedRun: number, focused: boolean, width: number): string[] {
+  const entries = [...history.entries].reverse();
+  const count = `${entries.length} ${entries.length === 1 ? "run" : "runs"}`;
+  // The trend keeps to the newest runs the title line can hold.
+  const room = Math.max(MIN_TREND_RUNS, width - INDENT.length - metric.length - count.length - 6);
+  const rows = entries.map(({ run, scenario }) => [
+    new Date(run.date).toLocaleString("en", DATE_FORMAT),
+    shortCommit(run),
+    run.git?.branch ?? "—",
+    shownValue(scenario, metric),
+    withUnit(scenario.budget?.[metric], metric),
+  ]);
+  const head = ["Date", "Commit", "Branch", metric, "Budget then"];
+  const lines = table([head, ...rows], [DATE_WIDTH, 9, 0, 13, 11], width, [false, false, false, true, true], BRANCH_COLUMN, MIN_BRANCH_WIDTH);
+  return [
+    `${INDENT}${bold(metric)} ${dim(`· ${count}`)}  ${trendLine(history.entries.slice(-room), metric)}`,
     "",
-    dim(INDENT + metricLines[0]),
-    ...metricLines.slice(1).map((line, i) => (i === metrics.indexOf(metric) ? SELECTED : INDENT) + line),
-    "",
-    `  ${bold(`Recent runs · ${metric}`)}`,
-    dim(INDENT + runLines[0]),
-    ...runLines.slice(1).map((line) => INDENT + line),
+    dim(INDENT + lines[0]),
+    ...lines.slice(1).map((line, i) => (i === selectedRun ? selectedLine(line, width, focused) : INDENT + line)),
   ];
 }

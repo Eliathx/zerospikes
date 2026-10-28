@@ -36,12 +36,12 @@ test("BudgetStore reads version 1 files, whose budgets have no machine", () => {
   const dir = mkdtempSync(join(tmpdir(), "zs-"));
   mkdirSync(join(dir, "__budgets__"));
   writeFileSync(join(dir, "__budgets__", "grid.perf.ts.json"), JSON.stringify({ version: 1, budgets: { a: { "frame.max": 41 } } }));
-  assert.deepEqual(new BudgetStore(join(dir, "grid.perf.ts")).get("a"), { budget: { "frame.max": 41 }, environment: undefined });
+  assert.deepEqual(BudgetStore.forSpec(join(dir, "grid.perf.ts")).get("a"), { budget: { "frame.max": 41 }, environment: undefined });
 });
 
 test("BudgetStore records where each budget was recorded and drops machines no budget uses", () => {
   const dir = mkdtempSync(join(tmpdir(), "zs-"));
-  const store = new BudgetStore(join(dir, "grid.perf.ts"));
+  const store = BudgetStore.forSpec(join(dir, "grid.perf.ts"));
   const ci = { ...pc, cpu: "AMD EPYC 7763", cores: 4, platform: "linux-x64" };
   store.set("a", { "frame.max": 41 }, pc);
   store.set("a", { "frame.max": 60 }, ci);

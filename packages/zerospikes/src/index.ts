@@ -43,7 +43,7 @@ export class ZeroSpikes {
     /** The machine the test runs on; `measure` adds the display rate when headed. */
     private readonly environment: Environment,
   ) {
-    this.store = new BudgetStore(testInfo.file);
+    this.store = BudgetStore.forSpec(testInfo.file);
   }
 
   /**
@@ -217,12 +217,12 @@ export class ZeroSpikes {
     const overTarget = overTargets(metrics);
     const base = { kind, key, test, name, project, metrics, environment, ...(overTarget.length ? { overTarget } : {}) };
     if (inCompareSession()) return { ...base, budget: null, status: "measured", violations: [] };
+    const derived = deriveBudget(worst, frameMs);
     const mode = process.env.ZS_UPDATE ? "all" : this.testInfo.config.updateSnapshots;
     const updating = mode === "all" || mode === "changed";
     const stored = this.store.get(key);
     const otherMachine =
       stored?.environment && !process.env.ZS_ANY_MACHINE ? environmentDifferences(stored.environment, environment) : [];
-    const derived = deriveBudget(worst, frameMs);
     let budget: Metrics | null = stored?.budget ?? null;
     let status: ScenarioResult["status"];
     let violations: Violation[] = [];
@@ -268,6 +268,8 @@ export class ZeroSpikes {
       budget,
       status,
       violations,
+      derived,
+      budgetFile: this.store.path,
       ...(metricNames(tighter).length ? { tighter } : {}),
       ...(status === "unchecked" ? { otherMachine } : {}),
     };
@@ -308,7 +310,7 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   if (r.samples) lines.push("", `  per cycle: ${r.samples.map((s) => `${s.heapMB} MB / ${s.domNodes} nodes`).join(" → ")}`);
   if (r.profilePath) lines.push("", `  CPU profile: ${r.profilePath}  (DevTools › Performance › Load profile)`);
   if (r.violations.some((v) => v.source === "budget")) {
-    lines.push(`  budgets: ${budgetPath}. If it is slower on purpose: ZS_ALLOW_WORSE=1 npx playwright test -u`);
+    lines.push(`  budgets: ${budgetPath}`, "  slower on purpose? accept it with w in npx zerospikes history, or ZS_ALLOW_WORSE=1 npx playwright test -u");
   }
   return lines.join("\n");
 }

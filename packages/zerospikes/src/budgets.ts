@@ -121,10 +121,10 @@ const sortedByKey = <T>(record: Record<string, T>): Record<string, T> =>
  * meant to be committed, like Playwright's snapshot folders.
  */
 export class BudgetStore {
-  readonly path: string;
+  constructor(readonly path: string) {}
 
-  constructor(specFile: string) {
-    this.path = join(dirname(specFile), "__budgets__", basename(specFile) + ".json");
+  static forSpec(specFile: string): BudgetStore {
+    return new BudgetStore(join(dirname(specFile), "__budgets__", basename(specFile) + ".json"));
   }
 
   private read(): BudgetFile {

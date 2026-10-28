@@ -123,6 +123,10 @@ export interface ScenarioResult {
   overTarget?: TargetMiss[];
   /** Limits that recording now would lower by more than 10%, at their new value: `-u` applies them. */
   tighter?: Metrics;
+  /** The whole budget recording this run would save, for accepting a slower scenario later without running it again. */
+  derived?: Metrics;
+  /** The budgets file the scenario's budget lives in. */
+  budgetFile?: string;
   /** Where the scenario ran. */
   environment?: Environment;
   /** For `unchecked`: what differs from where the budget was recorded, as `field: recorded → current`. */

@@ -6,7 +6,7 @@ import { readGitState } from "./git.js";
 import { recordRun } from "./history.js";
 import { SESSION_ENV } from "./session.js";
 import { metricNames } from "./stats.js";
-import { bold, dim, formatNumber, green, MARK, padEnd, padStart, red, truncate, visibleWidth, yellow } from "./terminal.js";
+import { bold, cyan, dim, formatNumber, green, MARK, padEnd, padStart, red, truncate, visibleWidth, yellow } from "./terminal.js";
 import type { MetricName, Metrics, ScenarioResult, TargetMiss } from "./types.js";
 
 export interface ZeroSpikesReporterOptions {
@@ -221,15 +221,18 @@ function targetNote(results: ScenarioResult[]): string[] {
 function tighterNote(results: ScenarioResult[]): string[] {
   const tighter = results.filter((r) => r.tighter && metricNames(r.tighter).length);
   if (!tighter.length) return [];
-  const out = [`  ${green("Can tighten")} ${dim("(faster than when recorded: npx playwright test -u keeps the gain)")}`];
+  const out = [`  ${cyan("Can lower")} ${dim("(faster than its budget: lower it with t in npx zerospikes history, or npx playwright test -u)")}`];
   const width = Math.max(...tighter.map((r) => [...label(r)].length));
   for (const r of tighter) {
     const limits = metricNames(r.tighter!).map((m) => `${m} ${formatNumber(r.budget?.[m] ?? 0)} → ${formatNumber(r.tighter![m]!)}`);
-    out.push(`  ${green("↓")} ${padEnd(label(r), width)}   ${limits.join(dim(" · "))}`);
+    out.push(`  ${cyan("↓")} ${padEnd(label(r), width)}   ${limits.join(", ")}`);
   }
   out.push("");
   return out;
 }
+
+const HIDE_CURSOR = "\x1b[?25l";
+const showCursor = () => process.stdout.write("\x1b[?25h");
 
 /** One table per kind of scenario at the end of the run, details of the failures, and a JSON of it all. */
 export default class ZeroSpikesReporter implements Reporter {
@@ -246,19 +249,42 @@ export default class ZeroSpikesReporter implements Reporter {
     this.total = suite?.allTests().length ?? 0;
   }
 
-  /** A braille spinner with elapsed time on the running scenario's line, TTY only. */
+  /**
+   * The running scenario in the list, lined up with the finished ones and its
+   * time so far, over a line pinned at the bottom with a braille spinner and
+   * how far the run is. TTY only.
+   */
   onTestBegin(test: TestCase): void {
     if (!process.stdout.isTTY) return;
+    this.clearProgress();
     const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
     const started = Date.now();
     let i = 0;
     const draw = () => {
-      const progress = this.total ? dim(`[${this.done + 1}/${this.total}] `) : "";
       const secs = ((Date.now() - started) / 1000).toFixed(1);
-      process.stdout.write(`\r\x1b[2K  ${yellow(frames[i++ % frames.length])} ${progress}${test.title} ${dim(`(${secs}s)`)}`);
+      // Kept within the terminal: a line that wraps would leave the cursor short of the block's top.
+      const room = (process.stdout.columns || 120) - 1;
+      const running = `  ${padEnd(dim("RUNNING"), 8)}${truncate(test.title, room - 18)} ${dim(`(${secs}s)`)}`;
+      const count = this.total ? ` ${dim(`(${this.done + 1}/${this.total})`)}` : "";
+      const footer = `  ${yellow(frames[i++ % frames.length])} Running tests${count}`;
+      // Drawn from the block's top, which the cursor goes back to after each draw.
+      process.stdout.write(`\r\x1b[0J${running}\n\n${footer}\x1b[2A\r`);
     };
+    // The cursor hidden while it sits at the block's top; shown again on the way out, even on Ctrl+C.
+    process.stdout.write(HIDE_CURSOR);
+    process.once("exit", showCursor);
     draw();
     this.spinner = setInterval(draw, 80);
+  }
+
+  /** Clears the running scenario and the line under it, leaving the cursor where the next result goes. */
+  private clearProgress(): void {
+    if (!this.spinner) return;
+    clearInterval(this.spinner);
+    this.spinner = undefined;
+    process.stdout.write("\r\x1b[0J");
+    showCursor();
+    process.off("exit", showCursor);
   }
 
   onTestEnd(test: TestCase, result: TestResult): void {
@@ -268,11 +294,7 @@ export default class ZeroSpikesReporter implements Reporter {
     }
     this.results.push(...own);
     this.done++;
-    if (this.spinner) {
-      clearInterval(this.spinner);
-      this.spinner = undefined;
-      process.stdout.write("\r\x1b[2K");
-    }
+    this.clearProgress();
     const failed = (result.status !== "passed" && result.status !== "skipped") || own.some((r) => r.status === "fail");
     const secs = (result.duration / 1000).toFixed(1);
     console.log(`  ${failed ? MARK.fail : MARK.pass}${test.title} ${dim(`(${secs}s)`)}`);
@@ -280,6 +302,7 @@ export default class ZeroSpikesReporter implements Reporter {
   }
 
   onEnd(): void {
+    this.clearProgress();
     const sessionFile = process.env[SESSION_ENV.resultsFile];
     if (sessionFile) {
       writeFileSync(sessionFile, JSON.stringify({ results: this.results }));
@@ -290,9 +313,10 @@ export default class ZeroSpikesReporter implements Reporter {
     const count = (s: ScenarioResult["status"]) => this.results.filter((r) => r.status === s).length;
     const parts = [`${this.results.length} scenarios`];
     parts.push(count("fail") ? red(`${count("fail")} over budget`) : green("all within budget"));
-    if (count("recorded")) parts.push(yellow(`${count("recorded")} budgets recorded`));
-    if (count("updated")) parts.push(yellow(`${count("updated")} budgets updated`));
-    if (count("unchecked")) parts.push(yellow(`${count("unchecked")} with budgets from another machine`));
+    // Grey like their statuses: yellow is kept for lag.
+    if (count("recorded")) parts.push(dim(`${count("recorded")} budgets recorded`));
+    if (count("updated")) parts.push(dim(`${count("updated")} budgets updated`));
+    if (count("unchecked")) parts.push(dim(`${count("unchecked")} with budgets from another machine`));
     const overTarget = this.results.filter((r) => r.overTarget?.length).length;
     if (overTarget) parts.push(yellow(`${overTarget} over target`));
 
@@ -304,6 +328,7 @@ export default class ZeroSpikesReporter implements Reporter {
     if (memory.length) tables.push(layout("Memory", memory, MEMORY));
     lines.push(...render(tables, termWidth));
     for (const r of this.results.filter((x) => x.status === "fail")) lines.push(...failureDetail(r), "");
+    if (count("fail")) lines.push(dim("  Slower on purpose? Accept it with w in npx zerospikes history."), "");
     lines.push(...targetNote(this.results), ...tighterNote(this.results), ...otherMachineNote(this.results));
 
     const dir = join(this.rootDir, this.options.outputDir ?? "zerospikes-results");
