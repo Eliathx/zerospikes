@@ -18,9 +18,25 @@ const sameLimits = (a: Metrics | null | undefined, b: Metrics | null | undefined
 /** What a change saved, in the actions' colour, ending on the budgets file it changed, bold so it stands out. */
 const saved = (what: string, path: string) => `${cyan(`${what} in`)} ${bold(cyan(relative(process.cwd(), path) || path))}`;
 
+/**
+ * Budgets as last read, by file and scenario. The view asks for them on every
+ * key, and reading the files that often makes moving through the list lag
+ * (on Windows above all, where each open is scanned): they're read again only
+ * after `t` or `w` changes one, or `forgetBudgets`.
+ */
+const readBudgets = new Map<string, Metrics | undefined>();
+
+/** Reads the budgets files again on the next look: a new run may have recorded or changed them. */
+export const forgetBudgets = () => readBudgets.clear();
+
 /** The scenario's budget in its file now, which a `t` or `w` may have changed since the run. */
 export function currentBudget(key: string, scenario: IndexedScenario): Metrics | undefined {
-  return scenario.budgetFile && existsSync(scenario.budgetFile) ? new BudgetStore(scenario.budgetFile).get(key)?.budget : undefined;
+  if (!scenario.budgetFile) return undefined;
+  const cacheKey = `${scenario.budgetFile}\0${key}`;
+  if (!readBudgets.has(cacheKey)) {
+    readBudgets.set(cacheKey, existsSync(scenario.budgetFile) ? new BudgetStore(scenario.budgetFile).get(key)?.budget : undefined);
+  }
+  return readBudgets.get(cacheKey);
 }
 
 export interface Outcome {
@@ -46,6 +62,7 @@ export function applyTighter(key: string, scenario: IndexedScenario): Outcome {
   // Budgets from before machines were stored have none to keep.
   if (!stored.environment) return { done: false, message: "This budget doesn't say which machine it's from: use npx playwright test -u." };
   store.set(key, { ...stored.budget, ...pending }, stored.environment);
+  forgetBudgets();
   return { done: true, message: saved(`Lowered ${metricNames(pending).join(", ")}`, store.path) };
 }
 
@@ -64,5 +81,6 @@ export function acceptSlower(dir: string, entry: IndexedRun, key: string): strin
     return "The budget changed since this run: run the tests again before accepting.";
   }
   store.set(key, result.derived, result.environment);
+  forgetBudgets();
   return saved("Saved the slower numbers as the budget", store.path);
 }

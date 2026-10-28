@@ -1,9 +1,10 @@
+import { relative } from "node:path";
 import { unitOf } from "./budgets.js";
 import { TARGETS } from "./defaults.js";
 import type { IndexedRun, IndexedScenario } from "./history.js";
 import { metricNames } from "./stats.js";
 import { bold, cyan, dim, formatNumber, green, hasColor, highlight, padEnd, padStart, red, sparkline, STATUS_WORD, treeLine, truncate, visibleWidth, yellow, type Paint } from "./terminal.js";
-import type { MetricName, Metrics } from "./types.js";
+import type { MetricName, Metrics, ScenarioResult, Violation } from "./types.js";
 
 /** A trend that spreads less than this is drawn flat: noise. Same threshold as `zerospikes compare`. */
 const NOTICEABLE_CHANGE = 0.1;
@@ -123,13 +124,6 @@ function table(rows: string[][], widths: number[], width: number, alignRight: bo
       })
       .join(COLUMN_GAP),
   );
-}
-
-export function header(runs: IndexedRun[], branch: string | undefined): string {
-  const latest = runs.at(-1);
-  const where = latest ? `last run ${relativeTime(latest.date)} · ${shortCommit(latest)}${latest.git?.branch ? ` ${latest.git.branch}` : ""}` : "no runs yet";
-  const count = `${runs.length} ${runs.length === 1 ? "run" : "runs"}`;
-  return `  ${bold("zerospikes history")}  ${dim(`${count} · ${branch ?? "all branches"} · ${where}`)}`;
 }
 
 /** Marks a scenario, or a metric, whose budget can be lowered. */
@@ -278,11 +272,122 @@ export function runsPane(history: ScenarioHistory, metric: MetricName, selectedR
     withUnit(scenario.budget?.[metric], metric),
   ]);
   const head = ["Date", "Commit", "Branch", metric, "Budget then"];
-  const lines = table([head, ...rows], [DATE_WIDTH, 9, 0, 13, 11], width, [false, false, false, true, true], BRANCH_COLUMN, MIN_BRANCH_WIDTH);
+  // The metric's name heads its column: as wide as the longest, `memory.listeners`.
+  const lines = table([head, ...rows], [DATE_WIDTH, 9, 0, Math.max(13, metric.length), 11], width, [false, false, false, true, true], BRANCH_COLUMN, MIN_BRANCH_WIDTH);
   return [
     `${INDENT}${bold(metric)} ${dim(`· ${count}`)}  ${trendLine(history.entries.slice(-room), metric)}`,
     "",
     dim(INDENT + lines[0]),
     ...lines.slice(1).map((line, i) => (i === selectedRun ? selectedLine(line, width, focused) : INDENT + line)),
   ];
+}
+
+/**
+ * How a run went, in one line: how many scenarios, how many over budget, and
+ * whatever else needs a look. Both the reporter and the view say it this way;
+ * the view says what can be lowered on its own line, with the key for it, so
+ * it leaves that out with `withLowerable` false.
+ */
+export const runSummary = (scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true) =>
+  summaryParts(scenarios, overTarget, withLowerable).join(dim(" · "));
+
+/** `runSummary`'s parts, the second always the verdict: over budget, or all within it. */
+export function summaryParts(scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true): string[] {
+  const count = (status: IndexedScenario["status"]) => scenarios.filter((scenario) => scenario.status === status).length;
+  const lowerable = scenarios.filter((scenario) => scenario.tighter && metricNames(scenario.tighter).length).length;
+  const parts = [`${scenarios.length} ${scenarios.length === 1 ? "scenario" : "scenarios"}`];
+  parts.push(count("fail") ? red(`${count("fail")} over budget`) : green("all within budget"));
+  // Grey like their statuses: yellow is kept for lag.
+  if (count("recorded")) parts.push(dim(`${count("recorded")} budgets recorded`));
+  if (count("updated")) parts.push(dim(`${count("updated")} budgets updated`));
+  if (count("unchecked")) parts.push(dim(`${count("unchecked")} not compared (budgets from another machine)`));
+  if (overTarget) parts.push(yellow(`${overTarget} over target`));
+  if (lowerable && withLowerable) parts.push(cyan(`${lowerable} can be lowered`));
+  return parts;
+}
+
+/** Most over-budget metrics a failure line names: the rest are in the scenario's own view. */
+const SHOWN_VIOLATIONS = 3;
+/** Past this, a failed scenario's name is cut short so its misses stay on the line. */
+const MAX_FAILURE_NAME_WIDTH = 48;
+
+type Miss = Pick<Violation, "metric" | "value" | "limit">;
+
+/** Limits gone over, worst first: `frame.max 442 ms > 146, input down/up 444 ms > 157`. */
+function formatMisses(misses: Miss[]): string {
+  // Input phases of one click or drag often share a number: one entry for them, `input down/up`.
+  const byKey = new Map<string, { names: string[]; miss: Miss }>();
+  for (const miss of misses) {
+    const phase = miss.metric.startsWith("input.") ? miss.metric.slice("input.".length) : null;
+    const key = phase ? `input:${formatNumber(miss.value)}` : miss.metric;
+    const entry = byKey.get(key);
+    if (entry && phase) entry.names.push(phase);
+    else byKey.set(key, { names: [phase ?? miss.metric], miss });
+  }
+  const ratio = (m: Miss) => m.value / Math.max(m.limit, 1);
+  const worst = [...byKey.values()].sort((a, b) => ratio(b.miss) - ratio(a.miss));
+  const shown = worst.slice(0, SHOWN_VIOLATIONS).map(({ names, miss: m }) => {
+    const name = m.metric.startsWith("input.") ? `input ${names.join("/")}` : m.metric;
+    return `${name} ${formatNumber(m.value)}${unitOf(m.metric)} > ${formatNumber(m.limit)}`;
+  });
+  if (worst.length > SHOWN_VIOLATIONS) shown.push(`+${worst.length - SHOWN_VIOLATIONS} more`);
+  return shown.join(", ");
+}
+
+/** A failed scenario's misses, worst first. */
+export const missesOf = (r: ScenarioResult) => formatMisses(r.violations);
+
+/** One line per failed scenario in `results`, names lined up, each after `indent`. */
+export function failureLines(results: ScenarioResult[], indent: string): string[] {
+  const failed = results.filter((r) => r.status === "fail");
+  const label = (r: ScenarioResult) => `${r.test} › ${r.name}`;
+  const width = Math.min(MAX_FAILURE_NAME_WIDTH, Math.max(0, ...failed.map((r) => [...label(r)].length)));
+  return failed.map((r) => `${indent}${STATUS_WORD.fail}  ${padEnd(truncate(label(r), width), width)}   ${red(missesOf(r))}`);
+}
+
+/** Functions the open scenario names from its profiled run. */
+const SHOWN_HOT_FUNCTIONS = 3;
+/** A profile names a function as `name @ file:line`. */
+const LOCATION_SEPARATOR = " @ ";
+
+/**
+ * What the latest run of an open scenario found beyond its numbers, each
+ * under a label that says what it is, cut to `width`: limits it missed that
+ * the budget column doesn't show, targets it lags behind, why it wasn't
+ * compared, and, for a failure, the functions it spent its time in.
+ */
+export function scenarioDetails(result: ScenarioResult, width: number): string[] {
+  const lines: string[] = [];
+  // A label, then its text cut to what's left of the line: cut before colouring, so no colour code is cut.
+  const labelled = (label: string, paint: Paint, text: string) =>
+    `  ${paint(label)}  ${truncate(text, Math.max(10, width - label.length - 5))}`;
+  const fixed = result.violations.filter((violation) => violation.source === "fixed");
+  if (fixed.length) lines.push(labelled("Over its fixed limit", red, formatMisses(fixed)));
+  if (result.overTarget?.length) {
+    const misses = result.overTarget.map(({ metric, value, target }) => ({ metric, value, limit: target }));
+    lines.push(labelled("Over target", yellow, formatMisses(misses)), dim("  A warning only: the budget decides pass or fail."));
+  }
+  if (result.otherMachine?.length) lines.push(labelled("Not compared", dim, `its budget is from another machine (${result.otherMachine.join(", ")})`));
+  if (result.samples?.length) lines.push(labelled("Per cycle", dim, result.samples.map((sample) => `${sample.domNodes} nodes`).join(" → ")));
+  if (result.hot?.length) {
+    const hot = result.hot.slice(0, SHOWN_HOT_FUNCTIONS).map((h) => ({ ms: `${formatNumber(h.selfMs)} ms`, ...splitLocation(h.fn) }));
+    const nameWidth = Math.max(...hot.map((h) => h.name.length));
+    if (lines.length) lines.push("");
+    lines.push(
+      `  ${bold("Where the time went")}`,
+      dim(`  ${truncate("Time in each function's own code, from one more run profiled because it failed.", width - 3)}`),
+    );
+    for (const h of hot) lines.push(`    ${padStart(h.ms, 9)}  ${padEnd(h.name, nameWidth)}  ${dim(h.location)}`);
+  }
+  if (result.profilePath) {
+    const path = relative(process.cwd(), result.profilePath) || result.profilePath;
+    lines.push("", dim("  The whole profile, to load in DevTools › Performance:"), dim(`    ${truncate(path, width - 5)}`));
+  }
+  return lines.length ? ["", ...lines] : [];
+}
+
+/** `foldText @ index.js:11721` as its name and where it is. */
+function splitLocation(fn: string): { name: string; location: string } {
+  const at = fn.lastIndexOf(LOCATION_SEPARATOR);
+  return at === -1 ? { name: fn, location: "" } : { name: fn.slice(0, at), location: fn.slice(at + LOCATION_SEPARATOR.length) };
 }

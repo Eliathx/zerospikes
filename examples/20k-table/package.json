@@ -10,11 +10,13 @@
     "preview": "vite preview --port 4173 --strictPort",
     "perf": "npm run build && playwright test",
     "perf:update": "npm run build && playwright test -u",
-    "perf:history": "zerospikes history",
     "perf:reliability": "node scripts/reliability.mjs",
     "perf:sensitivity": "node scripts/sensitivity.mjs",
     "perf:compare-reliability": "node scripts/compare-reliability.mjs",
     "perf:calibrate": "node scripts/calibrate-slack.mjs"
+  },
+  "zerospikes": {
+    "run": "npm run perf"
   },
   "dependencies": {
     "react": "^19.3.1",

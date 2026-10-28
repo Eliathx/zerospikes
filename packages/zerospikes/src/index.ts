@@ -310,7 +310,7 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   if (r.samples) lines.push("", `  per cycle: ${r.samples.map((s) => `${s.heapMB} MB / ${s.domNodes} nodes`).join(" → ")}`);
   if (r.profilePath) lines.push("", `  CPU profile: ${r.profilePath}  (DevTools › Performance › Load profile)`);
   if (r.violations.some((v) => v.source === "budget")) {
-    lines.push(`  budgets: ${budgetPath}`, "  slower on purpose? accept it with w in npx zerospikes history, or ZS_ALLOW_WORSE=1 npx playwright test -u");
+    lines.push(`  budgets: ${budgetPath}`, "  slower on purpose? accept it with w in npx zerospikes, or ZS_ALLOW_WORSE=1 npx playwright test -u");
   }
   return lines.join("\n");
 }

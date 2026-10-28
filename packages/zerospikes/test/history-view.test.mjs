@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { KEY, onKey, screen } from "../dist/history-command.js";
-import { scenarioHistories, scenarioList } from "../dist/history-view.js";
+import { KEY, keysIn, onKey, screen, startRun } from "../dist/history-command.js";
+import { runSummary, scenarioHistories, scenarioList } from "../dist/history-view.js";
 import { sparkline } from "../dist/terminal.js";
 
 const NOISE = 0.1;
@@ -46,7 +46,7 @@ test("keys move the selection, open a scenario, filter by branch and quit", () =
   assert.equal(state.openKey, undefined);
   onKey(state, "b");
   assert.equal(state.branch, "feat");
-  assert.match(screen(state, WIDE, Infinity), /1 run · feat/);
+  assert.match(screen(state, WIDE, Infinity), /b branch: feat/);
   assert.equal(onKey(state, "q"), "quit");
 });
 
@@ -62,18 +62,18 @@ test("t lowers the budgets the latest run beat, and only lowers", async () => {
   const latest = run("2026-10-28T10:00:00.000Z", "main", 40);
   latest.scenarios[SORT] = { ...latest.scenarios[SORT], tighter: { "cpu.main": 60 }, budgetFile };
   const state = { dir, runs: [...runs, latest], selected: 0, selectedMetric: 0 };
-  assert.match(screen(state, WIDE, Infinity), /1 test got faster than its budget\.\n\s+Press t to lower it/);
+  assert.match(screen(state, WIDE, Infinity), /↓ 1 faster than its budget   t lower/);
   onKey(state, "t");
   assert.match(state.message, /Lowered cpu\.main/);
   assert.deepEqual(JSON.parse(readFileSync(budgetFile, "utf8")).budgets[SORT], { "cpu.main": 60, "frame.max": 51 });
-  assert.doesNotMatch(screen(state, WIDE, Infinity), /got faster/);
+  assert.doesNotMatch(screen(state, WIDE, Infinity), /faster than/);
 });
 
 test("w asks before accepting a failed scenario, and any key but y keeps the budget", () => {
   const state = { dir: ".", runs, selected: 1, selectedMetric: 0 };
   onKey(state, KEY.enter);
   assert.equal(state.openKey, SORT);
-  assert.match(screen(state, WIDE, Infinity), /If that's on purpose, press w/);
+  assert.match(screen(state, WIDE, Infinity), /Slower than its budget\. On purpose\? w save the last run as its budget/);
   onKey(state, "w");
   assert.equal(state.confirming, SORT);
   assert.match(screen(state, WIDE, Infinity), /Save the last run's numbers/);
@@ -107,6 +107,15 @@ test("an open scenario lists its metrics on the left and the selected one's runs
   assert.equal(state.openKey, undefined);
 });
 
+test("a metric with a long name keeps every line within the terminal", () => {
+  const leak = { status: "pass", metrics: { "memory.listeners": 0 }, budget: { "memory.listeners": 5 } };
+  const state = { dir: ".", runs: runs.map((r) => ({ ...r, scenarios: { [SORT]: leak } })), selected: 0, selectedMetric: 0 };
+  onKey(state, KEY.enter);
+  const plain = screen(state, WIDE, Infinity).replace(/\x1b\[[0-9;]*m/g, "").split("\n");
+  assert.ok(plain.some((line) => /memory\.listeners +Budget then/.test(line)));
+  for (const line of plain) assert.ok([...line].length <= WIDE, `wider than ${WIDE}: ${line}`);
+});
+
 test("a narrow terminal puts the runs under the metrics", () => {
   const state = { dir: ".", runs, selected: 1, selectedMetric: 0 };
   onKey(state, KEY.enter);
@@ -133,4 +142,57 @@ test("space opens a scenario's metrics as a tree under it, and the selection kee
   onKey(state, KEY.down);
   onKey(state, KEY.space);
   assert.doesNotMatch(screen(state, WIDE, Infinity), /├/);
+});
+
+test("r runs from the list only, and the run holds the list until it ends", () => {
+  const state = { dir: ".", runs, selected: 0, selectedMetric: 0 };
+  onKey(state, KEY.enter);
+  assert.equal(onKey(state, "r"), undefined);
+  onKey(state, KEY.escape);
+  assert.equal(onKey(state, "r"), "run");
+  state.running = { command: "npx playwright test", started: Date.now(), total: 6, done: 2, last: "PASS    sort by client (3.1s)" };
+  for (const key of [KEY.down, KEY.enter, "r", "t", "b"]) assert.equal(onKey(state, key), undefined);
+  assert.equal(state.selected, 0);
+  assert.equal(state.openKey, undefined);
+  const shown = screen(state, WIDE, Infinity);
+  assert.match(shown, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running 2\/6 tests · \d+s\s+PASS    sort by client/);
+  assert.match(shown, /q stop the run and quit$/);
+  assert.doesNotMatch(shown, /Press t/);
+  assert.equal(onKey(state, "q"), "quit");
+});
+
+test("a run's summary counts what failed and what can be lowered", () => {
+  const summary = runSummary([{ status: "pass", tighter: { "cpu.main": 40 } }, { status: "fail" }, { status: "unchecked" }]);
+  assert.equal(summary, "3 scenarios · 1 over budget · 1 not compared (budgets from another machine) · 1 can be lowered");
+});
+
+test("a run started with r counts the tests it ends, and says so when it saves nothing", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const state = { dir: mkdtempSync(join(tmpdir(), "zs-")), runs: [], selected: 0, selectedMetric: 0 };
+  const lines = ["  Running 2 tests", "  PASS    filter (1.2s)", "  FAIL    sort (3.4s)", "Error: no browser"];
+  const command = `node -e "${lines.map((line) => `console.log('${line}')`).join(";")}"`;
+  let seen;
+  await new Promise((resolve) => {
+    startRun(state, command, () => (state.running ? (seen = { ...state.running }) : resolve()));
+  });
+  assert.equal(seen.total, 2);
+  assert.equal(seen.done, 2);
+  assert.equal(state.running, undefined);
+  assert.match(state.message, /saved nothing \(exit code 0\)\. Error: no browser/);
+});
+
+test("the last run sits in a box under the list, titled with when it ran, its verdict first", () => {
+  const lines = screen({ dir: ".", runs, selected: 0, selectedMetric: 0 }, WIDE, Infinity).split("\n");
+  const top = lines.findIndex((line) => line.includes("Last run"));
+  assert.match(lines[top], /^  ┌─ Last run \d+ d ago ─+┐$/);
+  assert.match(lines[top + 1], /^  │ ✗ 1 over budget   2 scenarios\s+│$/);
+  assert.equal(lines[top + 1].length, lines[top].length);
+  assert.match(lines[top + 2], /^  └─+┘$/);
+});
+
+test("keys that arrive together are each read, arrows whole", () => {
+  assert.deepEqual(keysIn(`${KEY.down}${KEY.down}q`), [KEY.down, KEY.down, "q"]);
+  assert.deepEqual(keysIn(KEY.escape), [KEY.escape]);
 });

@@ -17,29 +17,41 @@ test("filter as you type", async ({ page, zs }) => {
 ```
 
 ```
+  PASS    filter as you type (4.1s)
+  FAIL    sort by client (3.8s)
+  ...
+
   zerospikes  6 scenarios · 1 over budget · 1 budgets recorded
+  FAIL    sort by client › click the header   input down/move/up/click 351 ms > 87, frame.max 346 ms > 83
 
-  Interactions                                       frame max   frame p95   worst input → frame   slow frames
-  PASS    filter as you type › type «mar»            6.3 ≤ 41    6.2 ≤ 41    key   12.4 ≤ 58       0 ≤ 2
-  FAIL    sort by client › click the header          346 > 83    6.2 ≤ 41    down   351 > 87       1 ≤ 4
-  PASS    resize a column › drag the «Client» border 6.3 ≤ 46    6.2 ≤ 41    move   7.4 ≤ 46       0 ≤ 2
-  NEW     scroll the grid › 15 wheel steps           6.4 ≤ 41    6.2 ≤ 41    wheel 19.4 ≤ 58       0 ≤ 2
-
-  Memory                                             heap growth MB   DOM nodes   listeners
-  PASS    memory … › open and close 10 invoices      0.1 ≤ 3          0 ≤ 50      0 ≤ 5
-
-  FAIL    sort by client › click the header
-      frame.max                  346 ms   budget 83   4.2x over
-      input move/down/up/click   351 ms   budget 87   4.0x over
-      self time, one profiled run:
-          319 ms  (anonymous in sortRows) @ index.js:11740
-         28.5 ms  sortRows @ index.js:11738
-      profile: test-results/…/click-the-header.cpuprofile
+  Details, trends and budgets: npx zerospikes
 ```
 
 The test itself fails with the same detail, the path of the budgets file and
-how to accept an intended change (`npx playwright test -u`). Open the
-`.cpuprofile` in DevTools › Performance › Load profile.
+how to accept an intended change (`npx playwright test -u`).
+
+## The zerospikes command
+
+`npx zerospikes` opens every scenario's history in the terminal: its status in
+the latest run, each metric against its budget, and its trend across past runs
+and branches. Open a scenario to see where its time went (the hottest functions
+of a profiled run, the `.cpuprofile` to load in DevTools › Performance) and which targets it lags behind.
+
+| Key | What it does |
+|---|---|
+| `r` | Runs the suite; the view updates when it ends |
+| `t` | Lowers the budgets the latest run beat |
+| `w` | Saves a failed scenario's numbers as its budget, when it's slower on purpose |
+| `b` | Shows one branch's runs, or all |
+
+`r` runs `npx playwright test`, or the command your package.json names:
+
+```json
+"zerospikes": { "run": "npm run build && playwright test" }
+```
+
+Without a terminal, or with `--print`, it prints the scenario list once.
+`npx zerospikes compare` checks two served builds against each other.
 
 ## What it measures
 
@@ -60,10 +72,11 @@ how to accept an intended change (`npx playwright test -u`). Open the
 2. From then on, a scenario fails if it gets slower than what was saved. In
    your CI pipeline, run `npx playwright test --update-snapshots=none` so it
    only checks and never saves.
-3. If you made it slower on purpose, run `npx playwright test -u` to save the
-   new numbers, and commit them.
-4. If you made it faster, run `npx playwright test --update-snapshots=all` so
-   the faster numbers become the new limit.
+3. If you made it slower on purpose, press `w` on it in `npx zerospikes` (or
+   run `npx playwright test -u`) to save the new numbers, and commit them.
+4. If you made it faster, press `t` in `npx zerospikes` (or run
+   `npx playwright test --update-snapshots=all`) so the faster numbers become
+   the new limit.
 
 You can also set a fixed limit yourself: `{ budget: { "frame.max": 50 } }`.
 
@@ -76,7 +89,7 @@ zs.drag([x, y], [x2, y2], { steps })                 // one pointermove per fram
 zs.frame()                                           // wait for the next frame
 ```
 
-Add the reporter for the summary table and a JSON of every run:
+Add the reporter for the summary and the history `npx zerospikes` shows:
 
 ```ts
 // playwright.config.ts
@@ -97,8 +110,9 @@ npm run example:perf
 ```
 
 The first run records the budgets and passes. Set `sort: true` in
-`examples/20k-table/src/mistakes.ts`, run it again, and the sort scenario fails
-with the profile pointing at `sortRows`. `npm run example` opens the app with a
+`examples/20k-table/src/mistakes.ts`, run it again, and the sort scenario fails.
+`npx zerospikes` in `examples/20k-table` opens it, with the profile pointing at
+`sortRows`, and `r` there runs the suite again. `npm run example` opens the app with a
 live meter, to feel the mistakes by hand.
 
 | Mistake | What it does | What fails |

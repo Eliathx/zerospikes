@@ -47,12 +47,14 @@ test("accepting is refused when the budget changed since the run", () => {
 });
 
 test("a run's lower limits no longer apply once the budget was replaced, by another machine's say", async () => {
-  const { pendingTighter } = await import("../dist/budget-actions.js");
+  const { forgetBudgets, pendingTighter } = await import("../dist/budget-actions.js");
   const dir = mkdtempSync(join(tmpdir(), "zs-"));
   const budgetFile = join(dir, "grid.perf.ts.json");
   const scenario = { status: "pass", metrics: { "cpu.main": 40 }, budget: { "cpu.main": 100 }, tighter: { "cpu.main": 60 }, budgetFile };
   new BudgetStore(budgetFile).set(KEY, { "cpu.main": 100 }, machine);
   assert.deepEqual(pendingTighter(KEY, scenario), { "cpu.main": 60 });
   new BudgetStore(budgetFile).set(KEY, { "cpu.main": 300 }, { ...machine, cpu: "other" });
+  // Changed outside the view: it reads the files again when a new run lands.
+  forgetBudgets();
   assert.deepEqual(pendingTighter(KEY, scenario), {});
 });

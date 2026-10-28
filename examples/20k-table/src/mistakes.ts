@@ -8,7 +8,7 @@ export const MISTAKES = {
   /** Filter: every key press serializes and folds all rows instead of searching the prebuilt index. */
   filter: false,
   /** Sort: the comparator strips accents from both strings on every comparison instead of once per row. */
-  sort: false,
+  sort: true,
   /** Column resize: each drag re-measures the text of every cell, instead of reusing the first measurement. */
   resize: false,
   /** Detail panel: closing it leaves its window listener behind and keeps its DOM node in a cache. */
