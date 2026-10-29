@@ -100,16 +100,24 @@ workers: 1, // perf scenarios shouldn't compete for the CPU
 ## Desktop apps: Tauri and Electron
 
 To measure an app that is already running instead of a browser Playwright
-launches, give the project its Chrome DevTools Protocol endpoint. `page` is then
-the app's window: the same one in every test, so put the app back in its
-starting state in `beforeEach` (a `page.goto("/")` reloads it).
+launches, import `test` from `zerospikes/app` and give the project the app's
+Chrome DevTools Protocol endpoint. `page` is then the app's window: the same
+one in every test, so put the app back in its starting state in `beforeEach`
+(a `page.goto("/")` reloads it). A project without `zsConnect` runs the same
+spec in a browser.
+
+```ts
+// app.perf.ts
+import { test } from "zerospikes/app";
+```
 
 ```ts
 // playwright.config.ts
 import { defineConfig } from "@playwright/test";
-import type { ZeroSpikesOptions } from "zerospikes";
+import type { ZeroSpikesAppOptions } from "zerospikes/app";
 
-export default defineConfig<ZeroSpikesOptions>({
+export default defineConfig<ZeroSpikesAppOptions>({
+  workers: 1, // the app has one window: zerospikes stops a second worker
   use: { baseURL: "http://localhost:1420" },
   projects: [{ name: "tauri", use: { zsConnect: "http://127.0.0.1:9222" } }],
   webServer: {

@@ -2,7 +2,7 @@ import { test as base, expect, type CDPSession, type Page, type TestInfo } from 
 import { writeFileSync } from "node:fs";
 import { BudgetStore, check, deriveBudget, overTargets, tighten, tighterLimits, unitOf, validateLimits } from "./budgets.js";
 import { FALLBACK_FRAME_MS } from "./defaults.js";
-import { connectToApp, describeRuntime, runtimeHints } from "./connect.js";
+import type { AppRuntime } from "./connect.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
 import { describeEnvironment, displayRateOf, environmentDifferences, type Environment } from "./environment.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
@@ -329,55 +329,11 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   return lines.join("\n");
 }
 
-export interface ZeroSpikesOptions {
-  /**
-   * Measure an app that is already running instead of launching a browser:
-   * its Chrome DevTools Protocol endpoint, such as `http://127.0.0.1:9222`.
-   * A Tauri app on Windows exposes one when started with
-   * `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`, an
-   * Electron app with `--remote-debugging-port=9222`. `page` is then the app's
-   * window, the same one in every test.
-   */
-  zsConnect: string | undefined;
-}
-
-export const test = base.extend<{ zs: ZeroSpikes }, ZeroSpikesOptions>({
-  zsConnect: [undefined, { scope: "worker", option: true }],
-  // Playwright's own browser fixture, with connecting to a running app added.
-  // `_browserOptions` (Playwright's, set up for every worker) holds the launch options.
-  browser: [
-    async ({ playwright, browserName, connectOptions, zsConnect, _browserOptions }: any, use) => {
-      if (zsConnect) {
-        if (browserName !== "chromium") throw new Error(`zerospikes: zsConnect needs a chromium project, not ${browserName}`);
-        const browser = await connectToApp(playwright.chromium, zsConnect);
-        await use(browser);
-        // Over CDP this disconnects: the app keeps running.
-        await browser.close();
-        return;
-      }
-      const browser = connectOptions
-        ? await playwright[browserName].connect(connectOptions.wsEndpoint, {
-            ...connectOptions,
-            headers: { "x-playwright-launch-options": JSON.stringify(_browserOptions), ...connectOptions.headers },
-          })
-        : await playwright[browserName].launch();
-      await use(browser);
-      await browser.close({ reason: "Test ended." });
-    },
-    { scope: "worker", timeout: 0 },
-  ],
+export const test = base.extend<{ zs: ZeroSpikes; _zsRuntime: AppRuntime | null }>({
   baseURL: async ({ baseURL }, use) => use(process.env[SESSION_ENV.baseURL] || baseURL),
-  // The app's window belongs to a context Playwright didn't create, so it has no
-  // baseURL: resolve relative URLs here, and the same spec runs in both kinds of project.
-  page: async ({ page, baseURL, zsConnect }, use) => {
-    if (!zsConnect || !baseURL) return use(page);
-    const goto = page.goto;
-    page.goto = (url, options) => goto.call(page, new URL(url, baseURL).href, options);
-    await use(page);
-    page.goto = goto;
-  },
-  zs: async ({ page, browser, browserName, zsConnect }, use, testInfo) => {
-    const runtime = zsConnect ? describeRuntime(await page.evaluate(runtimeHints)) : null;
+  /** What the page runs in when it isn't a browser Playwright launched; `zerospikes/app` sets it. */
+  _zsRuntime: async ({}, use) => use(null),
+  zs: async ({ page, browser, browserName, _zsRuntime: runtime }, use, testInfo) => {
     const environment = describeEnvironment(
       { name: runtime?.name ?? browserName, version: browser.version() },
       runtime?.headless ?? testInfo.project.use.headless ?? true,
