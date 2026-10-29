@@ -97,6 +97,39 @@ reporter: [["list"], ["zerospikes/reporter"]],
 workers: 1, // perf scenarios shouldn't compete for the CPU
 ```
 
+## Desktop apps: Tauri and Electron
+
+To measure an app that is already running instead of a browser Playwright
+launches, give the project its Chrome DevTools Protocol endpoint. `page` is then
+the app's window: the same one in every test, so put the app back in its
+starting state in `beforeEach` (a `page.goto("/")` reloads it).
+
+```ts
+// playwright.config.ts
+import { defineConfig } from "@playwright/test";
+import type { ZeroSpikesOptions } from "zerospikes";
+
+export default defineConfig<ZeroSpikesOptions>({
+  use: { baseURL: "http://localhost:1420" },
+  projects: [{ name: "tauri", use: { zsConnect: "http://127.0.0.1:9222" } }],
+  webServer: {
+    command: "npx tauri dev",
+    env: { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9222" },
+    url: "http://127.0.0.1:9222/json/version", // up once the app's webview answers
+    reuseExistingServer: true,
+    timeout: 900_000,
+  },
+});
+```
+
+- **Tauri** on Windows runs in WebView2, which opens the port when
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` says so. macOS (WKWebView) and Linux
+  (WebKitGTK) have no CDP: measure the frontend in a browser there.
+- **Electron**: start it with `--remote-debugging-port=9222`.
+
+Budgets recorded this way say `webview2` or `electron` where a browser run says
+`chromium`, so they are never compared with a browser's.
+
 ## Example
 
 [examples/20k-table](https://github.com/Eliathx/zerospikes/tree/main/examples/20k-table)

@@ -2,6 +2,7 @@ import { test as base, expect, type CDPSession, type Page, type TestInfo } from 
 import { writeFileSync } from "node:fs";
 import { BudgetStore, check, deriveBudget, overTargets, tighten, tighterLimits, unitOf, validateLimits } from "./budgets.js";
 import { FALLBACK_FRAME_MS } from "./defaults.js";
+import { connectToApp, describeRuntime, runtimeHints } from "./connect.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
 import { describeEnvironment, displayRateOf, environmentDifferences, type Environment } from "./environment.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
@@ -190,6 +191,19 @@ export class ZeroSpikes {
   }
 
   /**
+   * Ends this test's CDP session; called by the fixture after the test body.
+   * An app's window outlives the test, and so would the session, with the
+   * domains it enabled, into every later test's measurements.
+   */
+  async detach(): Promise<void> {
+    const session = this.cdpSession;
+    this.cdpSession = null;
+    this.cpuClockEnabled = false;
+    // Already gone with the page or the connection: nothing left to end.
+    await session?.detach().catch(() => {});
+  }
+
+  /**
    * Compares `metrics` with the recorded budget, recording it as `-u` /
    * `ZS_UPDATE` say. New budgets are derived from `worst`, so they already
    * cover the run-to-run spread seen while recording.
@@ -315,12 +329,62 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   return lines.join("\n");
 }
 
-export const test = base.extend<{ zs: ZeroSpikes }>({
+export interface ZeroSpikesOptions {
+  /**
+   * Measure an app that is already running instead of launching a browser:
+   * its Chrome DevTools Protocol endpoint, such as `http://127.0.0.1:9222`.
+   * A Tauri app on Windows exposes one when started with
+   * `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`, an
+   * Electron app with `--remote-debugging-port=9222`. `page` is then the app's
+   * window, the same one in every test.
+   */
+  zsConnect: string | undefined;
+}
+
+export const test = base.extend<{ zs: ZeroSpikes }, ZeroSpikesOptions>({
+  zsConnect: [undefined, { scope: "worker", option: true }],
+  // Playwright's own browser fixture, with connecting to a running app added.
+  // `_browserOptions` (Playwright's, set up for every worker) holds the launch options.
+  browser: [
+    async ({ playwright, browserName, connectOptions, zsConnect, _browserOptions }: any, use) => {
+      if (zsConnect) {
+        if (browserName !== "chromium") throw new Error(`zerospikes: zsConnect needs a chromium project, not ${browserName}`);
+        const browser = await connectToApp(playwright.chromium, zsConnect);
+        await use(browser);
+        // Over CDP this disconnects: the app keeps running.
+        await browser.close();
+        return;
+      }
+      const browser = connectOptions
+        ? await playwright[browserName].connect(connectOptions.wsEndpoint, {
+            ...connectOptions,
+            headers: { "x-playwright-launch-options": JSON.stringify(_browserOptions), ...connectOptions.headers },
+          })
+        : await playwright[browserName].launch();
+      await use(browser);
+      await browser.close({ reason: "Test ended." });
+    },
+    { scope: "worker", timeout: 0 },
+  ],
   baseURL: async ({ baseURL }, use) => use(process.env[SESSION_ENV.baseURL] || baseURL),
-  zs: async ({ page, browser, browserName }, use, testInfo) => {
-    const environment = describeEnvironment({ name: browserName, version: browser.version() }, testInfo.project.use.headless ?? true);
+  // The app's window belongs to a context Playwright didn't create, so it has no
+  // baseURL: resolve relative URLs here, and the same spec runs in both kinds of project.
+  page: async ({ page, baseURL, zsConnect }, use) => {
+    if (!zsConnect || !baseURL) return use(page);
+    const goto = page.goto;
+    page.goto = (url, options) => goto.call(page, new URL(url, baseURL).href, options);
+    await use(page);
+    page.goto = goto;
+  },
+  zs: async ({ page, browser, browserName, zsConnect }, use, testInfo) => {
+    const runtime = zsConnect ? describeRuntime(await page.evaluate(runtimeHints)) : null;
+    const environment = describeEnvironment(
+      { name: runtime?.name ?? browserName, version: browser.version() },
+      runtime?.headless ?? testInfo.project.use.headless ?? true,
+    );
     const zs = new ZeroSpikes(page, testInfo, browserName === "chromium", environment);
     await use(zs);
+    await zs.detach();
     zs.assertWithinBudgets();
   },
 });

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { displayRateOf, environmentDifferences, environmentId } from "../dist/environment.js";
 import { BudgetStore } from "../dist/budgets.js";
+import { describeRuntime } from "../dist/connect.js";
 
 const pc = { cpu: "AMD Ryzen 5 3600", cores: 12, platform: "win32-x64", browser: "chromium 140", headless: true };
 
@@ -49,4 +50,11 @@ test("BudgetStore records where each budget was recorded and drops machines no b
   assert.equal(file.version, 2);
   assert.deepEqual(Object.values(file.environments), [ci]);
   assert.deepEqual(store.get("a"), { budget: { "frame.max": 60 }, environment: ci });
+});
+
+test("describeRuntime tells WebView2, Electron and Chrome apart", () => {
+  const edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0";
+  assert.deepEqual(describeRuntime({ userAgent: edge, webview2: true }), { name: "webview2", headless: false });
+  assert.deepEqual(describeRuntime({ userAgent: `${edge} Electron/33.0.0`, webview2: false }), { name: "electron", headless: false });
+  assert.deepEqual(describeRuntime({ userAgent: "Mozilla/5.0 HeadlessChrome/130.0.0.0", webview2: false }), { name: "chromium", headless: true });
 });
