@@ -3,7 +3,7 @@
 **Interaction performance limits for Playwright.**
 
 [![npm](https://img.shields.io/npm/v/zerospikes)](https://www.npmjs.com/package/zerospikes)
-[![license](https://img.shields.io/npm/l/zerospikes)](LICENSE)
+[![license](https://img.shields.io/npm/l/zerospikes?cacheSeconds=86400)](LICENSE)
 
 zerospikes measures every frame, the input latency and the main thread's CPU time while
 a Playwright scenario runs. The first run records its limits, like a snapshot, and later
