@@ -80,6 +80,31 @@ Without a terminal, or with `--print`, it prints the scenario list once.
 
 You can also set a fixed limit yourself: `{ budget: { "frame.max": 50 } }`.
 
+## Errors in the page
+
+A scenario that throws halfway can look faster than one that works. If the
+page logs a `console.error` or an uncaught exception while a scenario runs, it
+shows as `ERROR` instead of `PASS` or `FAIL`. Its numbers aren't compared with
+its budget and can't set or lower one; its history shows them greyed out. The
+test fails and lists the errors: fix
+them and run again. An error in the test's own steps counts against the
+scenarios after it, which start from what those steps left; one after the last
+scenario fails the test.
+
+Errors you expect, such as a warning from React's development build, can be
+left out by their message or the file they come from. A missing `favicon.ico`,
+which the browser asks for on its own, is left out already.
+
+```ts
+// playwright.config.ts
+import { defineConfig } from "@playwright/test";
+import type { ZeroSpikesOptions } from "zerospikes";
+
+export default defineConfig<ZeroSpikesOptions>({
+  use: { zsIgnoreErrors: ["ResizeObserver loop", /^Warning: Each child in a list/] },
+});
+```
+
 ## API
 
 ```ts

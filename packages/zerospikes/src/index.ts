@@ -6,6 +6,7 @@ import type { AppRuntime } from "./connect.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
 import { describeEnvironment, displayRateOf, environmentDifferences, type Environment } from "./environment.js";
 import { finishRecording, nextFrame, startRecording } from "./in-page.js";
+import { ErrorTally, watchErrors, type ErrorFilter, type ErrorWatch } from "./page-errors.js";
 import { SESSION_ENV, inCompareSession } from "./session.js";
 import { aggregate, median, metricNames, round, runMetrics, worstOf } from "./stats.js";
 import {
@@ -17,6 +18,7 @@ import {
   type MemorySample,
   type MetricName,
   type Metrics,
+  type PageError,
   type ScenarioResult,
   type Violation,
 } from "./types.js";
@@ -24,6 +26,7 @@ import {
 export type * from "./types.js";
 export { SLACK, TARGETS } from "./defaults.js";
 export { deriveBudget } from "./budgets.js";
+export type { ErrorFilter } from "./page-errors.js";
 export { expect };
 
 type Point = [x: number, y: number];
@@ -36,6 +39,14 @@ export class ZeroSpikes {
   /** Scenarios over budget, thrown together when the test ends. */
   private readonly failures: Error[] = [];
   private readonly store: BudgetStore;
+  private readonly errors: ErrorWatch;
+  /**
+   * What the page logged in the test's own steps before a scenario: the
+   * state the scenarios start from may be broken, so each one after counts them.
+   */
+  private readonly errorsBefore = new ErrorTally();
+  /** Those of `errorsBefore` a failure already lists: the next scenario's only points to them. */
+  private readonly errorsListed = new ErrorTally();
 
   constructor(
     readonly page: Page,
@@ -43,8 +54,11 @@ export class ZeroSpikes {
     private readonly chromium: boolean,
     /** The machine the test runs on; `measure` adds the display rate when headed. */
     private readonly environment: Environment,
+    /** Errors the page may log without the scenario counting as broken. */
+    ignoreErrors: readonly ErrorFilter[] = [],
   ) {
     this.store = BudgetStore.forSpec(testInfo.file);
+    this.errors = watchErrors(page, ignoreErrors);
   }
 
   /**
@@ -55,7 +69,9 @@ export class ZeroSpikes {
    * test once it ends, like `expect.soft`: the scenarios after it still run.
    * In Chromium every run starts after a forced GC, so garbage left by the
    * previous run isn't collected inside this one, and main-thread CPU time is
-   * recorded too.
+   * recorded too. If the page logs an error meanwhile, the scenario may not
+   * have done what it measures: it fails with the errors, and its numbers are
+   * neither compared nor recorded.
    */
   async measure(name: string, act: () => Promise<void>, opts: MeasureOptions = {}): Promise<ScenarioResult> {
     const { runs = 5, warmup = 1, before, settleMs = 300, profileOnFail = true } = opts;
@@ -64,6 +80,7 @@ export class ZeroSpikes {
     // How many long frames each script showed up in, across the measured runs.
     const longFrameScripts = new Map<string, number>();
     const frameGaps: number[] = [];
+    this.takeErrorsBefore();
     for (let i = 0; i < warmup + runs; i++) {
       if (before) await before();
       const cpuAtStart = this.chromium ? await this.startCpuClock() : null;
@@ -93,7 +110,7 @@ export class ZeroSpikes {
     const environment =
       this.environment.headless || !frameGaps.length ? this.environment : { ...this.environment, displayHz: displayRateOf(median(frameGaps)) };
     const frameMs = frameGaps.length ? median(frameGaps) : FALLBACK_FRAME_MS;
-    const result = this.decide("interaction", name, metrics, worstOf(perRun), frameMs, environment, opts.budget);
+    const result = this.decide("interaction", name, metrics, worstOf(perRun), frameMs, environment, this.errorsSoFar(), opts.budget);
     result.runs = perRun;
     if (cpuPerRun.length) {
       result.cpu = {
@@ -117,6 +134,8 @@ export class ZeroSpikes {
       await act();
       await this.page.waitForTimeout(settleMs);
       const profile = await stopProfiler(cdp);
+      // Its own run's, already judged: not the test's.
+      this.errors.take();
       result.hot = hotFunctions(profile);
       result.profilePath = this.testInfo.outputPath(`${slug(name)}.cpuprofile`);
       writeFileSync(result.profilePath, JSON.stringify(profile));
@@ -138,6 +157,7 @@ export class ZeroSpikes {
     }
     const { cycles = 5, warmup = 1 } = opts;
     const cdp = await this.cdp();
+    this.takeErrorsBefore();
     for (let i = 0; i < warmup; i++) await cycle();
     const samples: MemorySample[] = [await sampleMemory(cdp)];
     for (let i = 0; i < cycles; i++) {
@@ -152,7 +172,7 @@ export class ZeroSpikes {
       "memory.listeners": last.listeners - first.listeners,
     };
     if (opts.budget) validateLimits(name, opts.budget, MEMORY_METRICS, metrics);
-    const result = this.decide("memory", name, metrics, metrics, FALLBACK_FRAME_MS, this.environment, opts.budget);
+    const result = this.decide("memory", name, metrics, metrics, FALLBACK_FRAME_MS, this.environment, this.errorsSoFar(), opts.budget);
     result.samples = samples;
     return this.finish(result);
   }
@@ -185,17 +205,30 @@ export class ZeroSpikes {
     return readCpuClock(cdp);
   }
 
+  /** Counts what the page logged since the last scenario as logged before the next one. */
+  private takeErrorsBefore(): void {
+    for (const error of this.errors.take()) this.errorsBefore.add(error);
+  }
+
+  /** What the page logged in this test up to now: before the scenario and while it ran. */
+  private errorsSoFar(): PageError[] {
+    const all = new ErrorTally();
+    for (const error of [...this.errorsBefore.list(), ...this.errors.take()]) all.add(error);
+    return all.list();
+  }
+
   private async cdp(): Promise<CDPSession> {
     this.cdpSession ??= await this.page.context().newCDPSession(this.page);
     return this.cdpSession;
   }
 
   /**
-   * Ends this test's CDP session; called by the fixture after the test body.
-   * An app's window outlives the test, and so would the session, with the
-   * domains it enabled, into every later test's measurements.
+   * Ends this test's CDP session and stops watching for errors; called by the
+   * fixture after the test body. An app's window outlives the test, and so
+   * would the session, with the domains it enabled, into every later test's measurements.
    */
   async detach(): Promise<void> {
+    this.errors.stop();
     const session = this.cdpSession;
     this.cdpSession = null;
     this.cpuClockEnabled = false;
@@ -215,6 +248,9 @@ export class ZeroSpikes {
    *
    * A budget recorded on another machine is no limit here: it isn't compared,
    * unless `-u` records this machine's or `ZS_ANY_MACHINE` asks to compare anyway.
+   *
+   * A scenario whose page logged `errors` is none of this: numbers from a run
+   * that broke halfway can look faster, and would lower its budget for good.
    */
   private decide(
     kind: ScenarioResult["kind"],
@@ -223,11 +259,16 @@ export class ZeroSpikes {
     worst: Metrics,
     frameMs: number,
     environment: Environment,
+    errors: PageError[],
     fixed?: Metrics,
   ): ScenarioResult {
     const test = this.testInfo.titlePath.slice(1).join(" › ");
     const project = this.testInfo.project.name || "default";
     const key = `${project} › ${test} › ${name}`;
+    if (errors.length) {
+      const budget = inCompareSession() ? null : (this.store.get(key)?.budget ?? null);
+      return { kind, key, test, name, project, metrics, environment, budget, status: "error", violations: [], errors, budgetFile: this.store.path };
+    }
     const overTarget = overTargets(metrics);
     const base = { kind, key, test, name, project, metrics, environment, ...(overTarget.length ? { overTarget } : {}) };
     if (inCompareSession()) return { ...base, budget: null, status: "measured", violations: [] };
@@ -293,11 +334,23 @@ export class ZeroSpikes {
     await this.testInfo.attach("zerospikes", { body: JSON.stringify(result), contentType: "application/json" });
     // Created here so its stack points at the scenario's line in the test, not at the fixture.
     if (result.status === "fail") this.failures.push(new Error(formatFailure(result, this.store.path)));
+    if (result.status === "error") this.failures.push(new Error(this.formatScenarioErrors(result.name, result.errors ?? [])));
     return result;
   }
 
-  /** Throws every over-budget scenario of the test at once; called by the fixture after the test body. */
+  /** A broken scenario's failure: errors from before it that an earlier failure lists are only counted. */
+  private formatScenarioErrors(name: string, errors: PageError[]): string {
+    const unlisted = errors.filter((error) => !this.errorsListed.has(error));
+    for (const error of this.errorsBefore.list()) this.errorsListed.add(error);
+    const what = this.errorsBefore.size ? `"${name}" or before it` : `"${name}"`;
+    return formatErrors(what, unlisted, "so its numbers weren't compared with its budget", errors.length - unlisted.length);
+  }
+
+  /** Throws every over-budget or broken scenario of the test at once; called by the fixture after the test body. */
   assertWithinBudgets(): void {
+    // After the last scenario, or in a test with none: no scenario has them, so the test fails with them.
+    const errorsAfter = this.errors.take();
+    if (errorsAfter.length) this.failures.push(new Error(formatErrors("the test", errorsAfter)));
     if (!this.failures.length) return;
     const [first] = this.failures;
     const message = this.failures.map((e) => e.message).join("\n\n");
@@ -305,6 +358,18 @@ export class ZeroSpikes {
     first.message = message;
     throw first;
   }
+}
+
+/** The failure message of a scenario, or a test, whose page logged errors. */
+function formatErrors(what: string, errors: PageError[], consequence?: string, listedAbove = 0): string {
+  const lines = [`zerospikes: the page logged errors in ${what}${consequence ? `, ${consequence}` : ""}`];
+  for (const e of errors) {
+    lines.push(`  ${`${e.count}×`.padStart(4)}  ${e.message}`);
+    if (e.location) lines.push(`          at ${e.location}`);
+  }
+  if (listedAbove) lines.push(`  and ${listedAbove} logged before it, listed above`);
+  lines.push("", "  expected? leave them out with zsIgnoreErrors in the config's use");
+  return lines.join("\n");
 }
 
 /** The failure message of a scenario over budget, shown under the test in Playwright's output. */
@@ -329,16 +394,26 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   return lines.join("\n");
 }
 
-export const test = base.extend<{ zs: ZeroSpikes; _zsRuntime: AppRuntime | null }>({
+export interface ZeroSpikesOptions {
+  /**
+   * Errors the page may log while a scenario runs, by their message or the file
+   * they came from: a string anywhere in them, or a pattern. Any other
+   * `console.error` or uncaught exception makes the scenario fail as broken.
+   */
+  zsIgnoreErrors: ErrorFilter[];
+}
+
+export const test = base.extend<ZeroSpikesOptions & { zs: ZeroSpikes; _zsRuntime: AppRuntime | null }>({
   baseURL: async ({ baseURL }, use) => use(process.env[SESSION_ENV.baseURL] || baseURL),
+  zsIgnoreErrors: [[], { option: true }],
   /** What the page runs in when it isn't a browser Playwright launched; `zerospikes/app` sets it. */
   _zsRuntime: async ({}, use) => use(null),
-  zs: async ({ page, browser, browserName, _zsRuntime: runtime }, use, testInfo) => {
+  zs: async ({ page, browser, browserName, _zsRuntime: runtime, zsIgnoreErrors }, use, testInfo) => {
     const environment = describeEnvironment(
       { name: runtime?.name ?? browserName, version: browser.version() },
       runtime?.headless ?? testInfo.project.use.headless ?? true,
     );
-    const zs = new ZeroSpikes(page, testInfo, browserName === "chromium", environment);
+    const zs = new ZeroSpikes(page, testInfo, browserName === "chromium", environment, zsIgnoreErrors);
     await use(zs);
     await zs.detach();
     zs.assertWithinBudgets();

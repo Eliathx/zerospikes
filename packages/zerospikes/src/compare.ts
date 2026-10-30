@@ -64,6 +64,12 @@ export function compare(options: CompareOptions): ScenarioComparison[] {
     } catch {
       throw new Error(`zerospikes compare: the ${side} session produced no results.\n${result.stdout}\n${result.stderr}`);
     }
+    // A broken scenario's numbers would compare two different things.
+    const broken = results.find((r) => r.status === "error");
+    if (broken) {
+      const [first] = broken.errors ?? [];
+      throw new Error(`zerospikes compare: in the ${side} session the page logged errors in "${broken.key}": ${first?.message ?? "?"}`);
+    }
     for (const r of results) {
       const entry = samples.get(r.key) ?? { test: r.test, name: r.name, baseline: {}, candidate: {} };
       for (const [metric, value] of Object.entries(r.metrics as Metrics)) (entry[side][metric] ??= []).push(value);

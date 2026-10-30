@@ -1,9 +1,9 @@
 import type { FullConfig, Reporter, Suite, TestCase, TestResult } from "@playwright/test/reporter";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readGitState } from "./git.js";
 import { recordRun } from "./history.js";
-import { failureLines, runSummary } from "./history-view.js";
+import { failureLines, isFailure, runSummary } from "./history-view.js";
 import { inCompareSession, SESSION_ENV } from "./session.js";
 import { bold, dim, MARK, padEnd, truncate, yellow } from "./terminal.js";
 import type { ScenarioResult } from "./types.js";
@@ -85,8 +85,11 @@ export default class ZeroSpikesReporter implements Reporter {
     this.clearProgress();
     const failed = (result.status !== "passed" && result.status !== "skipped") || own.some((r) => r.status === "fail");
     const secs = (result.duration / 1000).toFixed(1);
-    console.log(`  ${failed ? MARK.fail : MARK.pass}${test.title} ${dim(`(${secs}s)`)}`);
-    if (failed && !own.length && result.error?.message) console.log(dim(result.error.message.split("\n")[0]));
+    // A broken scenario before a slow one: its numbers say nothing until it's fixed.
+    const mark = own.some((r) => r.status === "error") ? MARK.error : failed ? MARK.fail : MARK.pass;
+    console.log(`  ${mark}${test.title} ${dim(`(${secs}s)`)}`);
+    // A failure no scenario explains: the test's own error says why.
+    if (failed && !own.some(isFailure) && result.error?.message) console.log(dim(result.error.message.split("\n")[0]));
   }
 
   onEnd(): void {
@@ -101,7 +104,7 @@ export default class ZeroSpikesReporter implements Reporter {
     const lines = ["", `  ${bold("zerospikes")}  ${runSummary(this.results, overTarget)}`, ...failureLines(this.results, "  ")];
     lines.push("", dim("  Details, trends and budgets: npx zerospikes"), "");
 
-    const dir = join(this.rootDir, this.options.outputDir ?? "zerospikes-results");
+    const dir = resolve(this.rootDir, this.options.outputDir ?? "zerospikes-results");
     mkdirSync(dir, { recursive: true });
     recordRun(dir, { date: new Date().toISOString(), git: readGitState(this.rootDir), results: this.results });
     console.log(lines.join("\n"));

@@ -6,6 +6,7 @@ import { acceptSlower, applyTighter, currentBudget, forgetBudgets, pendingTighte
 import { readIndex, readRun, type IndexedRun, type Run } from "./history.js";
 import {
   branchesOf,
+  isFailure,
   METRICS_PANE_WIDTH,
   metricsPane,
   PANE_HEADER_LINES,
@@ -193,7 +194,7 @@ const LOWER_MARK = "↓";
 
 /** The last run's box is as wide as the list, at most. */
 const LAST_RUN_MAX_WIDTH = 100;
-/** Failed scenarios the box names, two lines each; the list marks them all. */
+/** Failed or broken scenarios the box names, two lines each; the list marks them all. */
 const SHOWN_FAILURES = 3;
 
 /**
@@ -206,13 +207,13 @@ function lastRunBox(state: State, runs: IndexedRun[], lowerable: number, width: 
   const latest = runs.at(-1);
   if (!latest) return [];
   const results = fullRun(state, latest)?.results ?? [];
-  const failed = results.filter((result) => result.status === "fail");
+  const failed = results.filter(isFailure);
   const overTarget = results.filter((result) => result.overTarget?.length).length;
   const [count, verdict, ...rest] = summaryParts(Object.values(latest.scenarios), overTarget, false);
   const boxWidth = Math.min(width - BOX_MARGIN.length - 1, LAST_RUN_MAX_WIDTH);
   // Inside the borders, a space of padding on each side.
   const room = boxWidth - 4;
-  const mark = Object.values(latest.scenarios).some((scenario) => scenario.status === "fail") ? red("✗") : green("✓");
+  const mark = Object.values(latest.scenarios).some(isFailure) ? red("✗") : green("✓");
   const lines = [`${mark} ${bold(verdict)}   ${[count, ...rest].map((part) => dim(part)).join(dim(" · "))}`];
   for (const result of failed.slice(0, SHOWN_FAILURES)) {
     lines.push("", `${red("✗")} ${bold(truncate(`${result.test} › ${result.name}`, room - 2))}`, `  ${red(truncate(missesOf(result), room - 2))}`);
@@ -348,8 +349,9 @@ export function onKey(state: State, key: string): "quit" | "run" | void {
       state.message = [cyan(`Lowered the budgets of ${count} scenarios.`), outcomes.find((o) => !o.done)?.message].filter(Boolean).join(" ");
     }
   } else if (key === "w" && open) {
-    if (latestOf(open).scenario.status === "fail") state.confirming = open.key;
-    else state.message = "Its last run passed: nothing to accept.";
+    const { status } = latestOf(open).scenario;
+    if (status === "fail") state.confirming = open.key;
+    else state.message = status === "error" ? "Its last run logged errors: fix them, then run it again." : "Its last run passed: nothing to accept.";
   } else if (key === "b") {
     const choices = [undefined, ...branchesOf(state.runs)];
     state.branch = choices[(choices.indexOf(state.branch) + 1) % choices.length];
@@ -365,7 +367,7 @@ function stopRun(child: ChildProcess): void {
 }
 
 /** The reporter's line for a test that ended, with its time: `PASS    filter as you type (3.2s)`. */
-const TEST_DONE = /^(PASS|FAIL)\s.*\(\d+(\.\d+)?s\)$/;
+const TEST_DONE = /^(PASS|FAIL|ERROR)\s.*\(\d+(\.\d+)?s\)$/;
 const RUNNING_TESTS = /^Running (\d+) tests?$/;
 
 /**

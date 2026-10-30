@@ -1,4 +1,4 @@
-import { test as browserTest } from "./index.js";
+import { test as browserTest, type ZeroSpikesOptions } from "./index.js";
 import { connectToApp, describeRuntime, runtimeHints } from "./connect.js";
 
 /**
@@ -11,7 +11,10 @@ import { connectToApp, describeRuntime, runtimeHints } from "./connect.js";
  */
 export * from "./index.js";
 
-export interface ZeroSpikesAppOptions {
+/** The options for `defineConfig`: `zsConnect` set per worker, the rest per test. */
+export interface ZeroSpikesAppOptions extends ZeroSpikesOptions, AppWorkerOptions {}
+
+interface AppWorkerOptions {
   /**
    * The running app's Chrome DevTools Protocol endpoint, such as
    * `http://127.0.0.1:9222`. A Tauri app on Windows exposes one when started with
@@ -26,7 +29,7 @@ export interface ZeroSpikesAppOptions {
 const forceASCII = (json: string) =>
   json.replace(/[\u007f-￿]/g, (c) => "\\u" + ("0000" + c.charCodeAt(0).toString(16)).slice(-4));
 
-export const test = browserTest.extend<object, ZeroSpikesAppOptions & { _reuseContext: boolean }>({
+export const test = browserTest.extend<object, AppWorkerOptions & { _reuseContext: boolean }>({
   zsConnect: [undefined, { scope: "worker", option: true }],
   // Playwright's own browser fixture with connecting to a running app added.
   // Without zsConnect it does what Playwright's does (playwright/lib/index.js);

@@ -103,6 +103,14 @@ export interface HotFunction {
   selfMs: number;
 }
 
+/** A `console.error`, or an exception nothing caught, while a scenario ran; the same one repeated counts once. */
+export interface PageError {
+  message: string;
+  /** Where it came from, as `file:line`, when the page said. */
+  location?: string;
+  count: number;
+}
+
 /** What a test attaches for the reporter, one per `measure` / `cycles` call. */
 export interface ScenarioResult {
   kind: "interaction" | "memory";
@@ -116,8 +124,10 @@ export interface ScenarioResult {
    * `measured`: inside a `zerospikes compare` session, where budgets play no part.
    * `unchecked`: the budget was recorded on another machine, so it wasn't compared
    * (fixed limits still were).
+   * `error`: the page logged errors while it ran, so it may not have done what it
+   * measures: its numbers weren't compared, recorded or offered to lower a budget.
    */
-  status: "pass" | "fail" | "recorded" | "updated" | "measured" | "unchecked";
+  status: "pass" | "fail" | "recorded" | "updated" | "measured" | "unchecked" | "error";
   violations: Violation[];
   /** Metrics over their target. Reported, never failed for. */
   overTarget?: TargetMiss[];
@@ -139,4 +149,6 @@ export interface ScenarioResult {
   hot?: HotFunction[];
   profilePath?: string;
   longFrameScripts?: string[];
+  /** For `error`: what the page logged, most repeated first. */
+  errors?: PageError[];
 }

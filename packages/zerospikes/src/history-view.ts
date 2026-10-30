@@ -4,7 +4,7 @@ import { TARGETS } from "./defaults.js";
 import type { IndexedRun, IndexedScenario } from "./history.js";
 import { metricNames } from "./stats.js";
 import { bold, cyan, dim, formatNumber, green, hasColor, highlight, padEnd, padStart, red, sparkline, STATUS_WORD, treeLine, truncate, visibleWidth, yellow, type Paint } from "./terminal.js";
-import type { MetricName, Metrics, ScenarioResult, Violation } from "./types.js";
+import type { MetricName, Metrics, PageError, ScenarioResult, Violation } from "./types.js";
 
 /** A trend that spreads less than this is drawn flat: noise. Same threshold as `zerospikes compare`. */
 const NOTICEABLE_CHANGE = 0.1;
@@ -291,12 +291,17 @@ export function runsPane(history: ScenarioHistory, metric: MetricName, selectedR
 export const runSummary = (scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true) =>
   summaryParts(scenarios, overTarget, withLowerable).join(dim(" · "));
 
-/** `runSummary`'s parts, the second always the verdict: over budget, or all within it. */
+/**
+ * `runSummary`'s parts, the second always the verdict: over budget, with
+ * errors, or all within budget, which a run with errors can't claim.
+ */
 export function summaryParts(scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true): string[] {
   const count = (status: IndexedScenario["status"]) => scenarios.filter((scenario) => scenario.status === status).length;
   const lowerable = scenarios.filter((scenario) => scenario.tighter && metricNames(scenario.tighter).length).length;
   const parts = [`${scenarios.length} ${scenarios.length === 1 ? "scenario" : "scenarios"}`];
-  parts.push(count("fail") ? red(`${count("fail")} over budget`) : green("all within budget"));
+  const withErrors = red(`${count("error")} with errors`);
+  parts.push(count("fail") ? red(`${count("fail")} over budget`) : count("error") ? withErrors : green("all within budget"));
+  if (count("fail") && count("error")) parts.push(withErrors);
   // Grey like their statuses: yellow is kept for lag.
   if (count("recorded")) parts.push(dim(`${count("recorded")} budgets recorded`));
   if (count("updated")) parts.push(dim(`${count("updated")} budgets updated`));
@@ -334,19 +339,40 @@ function formatMisses(misses: Miss[]): string {
   return shown.join(", ");
 }
 
-/** A failed scenario's misses, worst first. */
-export const missesOf = (r: ScenarioResult) => formatMisses(r.violations);
+/**
+ * What went wrong with a scenario, in one line: the limits it went over, worst
+ * first, or the error its page logged most, and how many others.
+ */
+export function missesOf(r: ScenarioResult): string {
+  if (r.status !== "error") return formatMisses(r.violations);
+  const [first, ...others] = r.errors ?? [];
+  if (!first) return "the page logged errors";
+  return `${first.count > 1 ? `${first.count}× ` : ""}${first.message}${others.length ? `  +${others.length} more` : ""}`;
+}
 
-/** One line per failed scenario in `results`, names lined up, each after `indent`. */
+/** Scenarios that went wrong: over budget, or broken by errors. */
+export const isFailure = (r: Pick<ScenarioResult, "status">) => r.status === "fail" || r.status === "error";
+
+/** `ERROR`, the wider of the two words a failure line starts with: the names after them line up. */
+const FAILURE_WORD_WIDTH = 5;
+/** An error's message runs on where a list of misses doesn't: cut here. */
+const MAX_FAILURE_TEXT_WIDTH = 120;
+
+/** One line per failed or broken scenario in `results`, names lined up, each after `indent`. */
 export function failureLines(results: ScenarioResult[], indent: string): string[] {
-  const failed = results.filter((r) => r.status === "fail");
+  const failed = results.filter(isFailure);
   const label = (r: ScenarioResult) => `${r.test} › ${r.name}`;
   const width = Math.min(MAX_FAILURE_NAME_WIDTH, Math.max(0, ...failed.map((r) => [...label(r)].length)));
-  return failed.map((r) => `${indent}${STATUS_WORD.fail}  ${padEnd(truncate(label(r), width), width)}   ${red(missesOf(r))}`);
+  return failed.map((r) => {
+    const word = padEnd(STATUS_WORD[r.status], FAILURE_WORD_WIDTH);
+    return `${indent}${word}  ${padEnd(truncate(label(r), width), width)}   ${red(truncate(missesOf(r), MAX_FAILURE_TEXT_WIDTH))}`;
+  });
 }
 
 /** Functions the open scenario names from its profiled run. */
 const SHOWN_HOT_FUNCTIONS = 3;
+/** Errors the open scenario lists; the test's own failure has them all. */
+const SHOWN_ERRORS = 5;
 /** A profile names a function as `name @ file:line`. */
 const LOCATION_SEPARATOR = " @ ";
 
@@ -354,9 +380,11 @@ const LOCATION_SEPARATOR = " @ ";
  * What the latest run of an open scenario found beyond its numbers, each
  * under a label that says what it is, cut to `width`: limits it missed that
  * the budget column doesn't show, targets it lags behind, why it wasn't
- * compared, and, for a failure, the functions it spent its time in.
+ * compared, and, for a failure, the functions it spent its time in. A
+ * scenario whose page logged errors shows them alone: nothing else it measured holds.
  */
 export function scenarioDetails(result: ScenarioResult, width: number): string[] {
+  if (result.status === "error") return errorDetails(result.errors ?? [], width);
   const lines: string[] = [];
   // A label, then its text cut to what's left of the line: cut before colouring, so no colour code is cut.
   const labelled = (label: string, paint: Paint, text: string) =>
@@ -384,6 +412,20 @@ export function scenarioDetails(result: ScenarioResult, width: number): string[]
     lines.push("", dim("  The whole profile, to load in DevTools › Performance:"), dim(`    ${truncate(path, width - 5)}`));
   }
   return lines.length ? ["", ...lines] : [];
+}
+
+/** The errors a broken scenario's page logged, each with how many times and where. */
+function errorDetails(errors: PageError[], width: number): string[] {
+  const label = "Errors in the page:";
+  const lines = ["", `  ${red(label)} ${truncate("its numbers weren't compared with its budget. Fix them and run again.", Math.max(10, width - label.length - 4))}`];
+  const shown = errors.slice(0, SHOWN_ERRORS);
+  const countWidth = Math.max(...shown.map((e) => `${e.count}×`.length));
+  for (const e of shown) {
+    lines.push(`  ${padStart(`${e.count}×`, countWidth)}  ${truncate(e.message, width - countWidth - 5)}`);
+    if (e.location) lines.push(dim(`  ${" ".repeat(countWidth)}    at ${truncate(e.location, width - countWidth - 10)}`));
+  }
+  if (errors.length > SHOWN_ERRORS) lines.push(dim(`  +${errors.length - SHOWN_ERRORS} more, in the test's failure`));
+  return lines;
 }
 
 /** `foldText @ index.js:11721` as its name and where it is. */

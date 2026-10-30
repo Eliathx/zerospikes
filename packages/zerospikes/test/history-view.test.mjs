@@ -196,3 +196,29 @@ test("keys that arrive together are each read, arrows whole", () => {
   assert.deepEqual(keysIn(`${KEY.down}${KEY.down}q`), [KEY.down, KEY.down, "q"]);
   assert.deepEqual(keysIn(KEY.escape), [KEY.escape]);
 });
+
+test("a scenario whose page logged errors says ERROR, lists them, and has nothing to accept or lower", async () => {
+  const { failureLines, scenarioDetails } = await import("../dist/history-view.js");
+  const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const errors = [
+    { message: "TypeError: Cannot read properties of undefined (reading 'rows')", location: "src/grid.ts:12", count: 3 },
+    { message: "Failed to load resource", count: 1 },
+  ];
+  const broken = { key: SORT, test: "sort", name: "click", status: "error", metrics: { "frame.max": 4 }, budget: { "frame.max": 51 }, violations: [], errors };
+  assert.equal(plain(runSummary([{ status: "pass" }, broken])), "2 scenarios · 1 with errors");
+  assert.equal(plain(runSummary([{ status: "fail" }, broken])), "2 scenarios · 1 over budget · 1 with errors");
+  assert.equal(plain(failureLines([broken], "  ")[0]), "  ERROR  sort › click   3× TypeError: Cannot read properties of undefined (reading 'rows')  +1 more");
+  const details = plain(scenarioDetails(broken, WIDE).join("\n"));
+  assert.match(details, /Errors in the page: its numbers weren't compared with its budget/);
+  assert.match(details, /3×  TypeError[^\n]*\n\s+at src\/grid\.ts:12\n\s+1×  Failed to load resource/);
+
+  const latest = run("2026-10-28T10:00:00.000Z", "main", 4, "error");
+  const state = { dir: ".", runs: [...runs, latest], selected: 1, selectedMetric: 0 };
+  assert.match(plain(scenarioList(scenarioHistories(state.runs), -1, WIDE)[2]), /sort › click\s+ERROR\s*$/);
+  assert.match(plain(screen(state, WIDE, Infinity)), /✗ 1 with errors/);
+  onKey(state, KEY.enter);
+  assert.doesNotMatch(plain(screen(state, WIDE, Infinity)), /On purpose\?/);
+  onKey(state, "w");
+  assert.equal(state.confirming, undefined);
+  assert.match(state.message, /logged errors/);
+});
