@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { aggregate, median, quantile, runMetrics, worstOf } from "../dist/stats.js";
+import { aggregate, median, runMetrics, worstOf } from "../dist/stats.js";
 import { LimitStore, check, deriveLimit, overTargets, tighten, tighterLimits, validateLimits } from "../dist/limits.js";
 import { INTERACTION_METRICS } from "../dist/types.js";
 
@@ -27,6 +27,14 @@ test("runMetrics turns frame timestamps and inputs into per-phase numbers", () =
   assert.equal(m["input.key"], undefined);
 });
 
+test("runMetrics keeps input.click only for a click without a pointerup", () => {
+  const pointer = runMetrics({ frames: [0, 16], inputs: [{ type: "pointerup", ms: 30 }, { type: "click", ms: 30 }], longFrames: null });
+  assert.equal(pointer["input.up"], 30);
+  assert.equal("input.click" in pointer, false);
+  const keyboard = runMetrics({ frames: [0, 16], inputs: [{ type: "keydown", ms: 8 }, { type: "click", ms: 25 }], longFrames: null });
+  assert.equal(keyboard["input.click"], 25);
+});
+
 test("runMetrics leaves frame.long out when the browser has no LoAF", () => {
   assert.equal("frame.long" in runMetrics({ frames: [0, 16], inputs: [], longFrames: null }), false);
 });
@@ -41,10 +49,9 @@ test("worstOf keeps the highest value per metric, the basis for new limits", () 
   assert.deepEqual(out, { "frame.max": 40, "input.key": 30 });
 });
 
-test("median and quantile", () => {
+test("median", () => {
   assert.equal(median([3, 1, 2]), 2);
-  assert.equal(quantile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.95), 10);
-  assert.equal(quantile([], 0.95), 0);
+  assert.equal(median([4, 1, 2, 3]), 2.5);
 });
 
 test("derived time limits leave two measured frames, or 60% on heavy interactions", () => {

@@ -41,10 +41,11 @@ const worstOf = (runs) => {
 };
 
 /**
- * Reports keep frame gaps only as metrics, so the display frame is taken as
- * the lowest frame.p95 of the session: an idle frame, with nothing to drop.
+ * The display frame the session measured. The files in calibration/ come from
+ * before results said it: there, the lowest frame.p95 of the session, an idle
+ * frame with nothing to drop.
  */
-const frameOf = (session) => Math.min(...(session.runs ?? []).map((run) => run["frame.p95"] ?? Infinity));
+const frameOf = (session) => session.frameMs ?? Math.min(...(session.runs ?? []).map((run) => run["frame.p95"] ?? Infinity));
 
 /** Memory cycles have no separate runs: their one measurement is the worst. */
 const worstOfSession = (session) => (session.runs?.length ? worstOf(session.runs) : session.metrics);

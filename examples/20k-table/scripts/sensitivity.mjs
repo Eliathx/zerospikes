@@ -39,7 +39,7 @@ function measureFactor(scenario, factor, baseline) {
     outcome.runs++;
     outcome.limit ??= result.limits?.[scenario.metric] ?? null;
     outcome.latencies.push(result.metrics[scenario.metric]);
-    outcome.measurements.push({ metrics: result.metrics, runs: result.runs });
+    outcome.measurements.push({ metrics: result.metrics, frameMs: result.frameMs, runs: result.runs });
     if (result.status === "fail") outcome.failures++;
     for (const violation of result.violations) {
       outcome.failedMetrics[violation.metric] = (outcome.failedMetrics[violation.metric] ?? 0) + 1;

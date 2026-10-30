@@ -75,7 +75,7 @@ class ZeroSpikesFixture {
    * neither compared nor recorded.
    */
   async measure(name: string, act: () => Promise<void>, opts: MeasureOptions = {}): Promise<ScenarioResult> {
-    const { runs = 5, warmup = 1, before, settleMs = 300, profileOnFail = true } = opts;
+    const { runs = 5, warmup = 1, before, after, settleMs = 300, profileOnFail = true } = opts;
     const perRun: Metrics[] = [];
     const cpuPerRun: CpuBreakdown[] = [];
     // How many long frames each script showed up in, across the measured runs.
@@ -89,6 +89,7 @@ class ZeroSpikesFixture {
       await act();
       const recording = await this.page.evaluate(finishRecording, settleMs);
       const cpuAtEnd = cpuAtStart ? await readCpuClock(await this.cdp()) : null;
+      if (after) await after();
       if (i < warmup) continue;
       const metrics = runMetrics(recording);
       if (cpuAtStart && cpuAtEnd) {
@@ -112,6 +113,7 @@ class ZeroSpikesFixture {
       this.environment.headless || !frameGaps.length ? this.environment : { ...this.environment, displayHz: displayRateOf(median(frameGaps)) };
     const frameMs = frameGaps.length ? median(frameGaps) : FALLBACK_FRAME_MS;
     const result = this.decide("interaction", name, metrics, worstOf(perRun), frameMs, environment, this.errorsSoFar(), opts.limits);
+    result.frameMs = round(frameMs);
     result.runs = perRun;
     if (cpuPerRun.length) {
       result.cpu = {
@@ -135,6 +137,7 @@ class ZeroSpikesFixture {
       await act();
       await this.page.waitForTimeout(settleMs);
       const profile = await stopProfiler(cdp);
+      if (after) await after();
       // Its own run's, already judged: not the test's.
       this.errors.take();
       result.hot = hotFunctions(profile);
@@ -238,8 +241,8 @@ class ZeroSpikesFixture {
   }
 
   /**
-   * Compares `metrics` with the recorded limits, recording them as `-u` /
-   * `ZS_UPDATE` say. New limits are derived from `worst`, so they already
+   * Compares `metrics` with the recorded limits, recording them as `-u`
+   * says. New limits are derived from `worst`, so they already
    * cover the run-to-run spread seen while recording.
    *
    * Recording again only tightens: each limit keeps the lower of the stored
@@ -247,8 +250,8 @@ class ZeroSpikesFixture {
    * got slower still fails. `ZS_ALLOW_WORSE` accepts the new numbers whatever
    * they are, for a change that is slower on purpose.
    *
-   * Limits recorded on another machine aren't checked here,
-   * unless `-u` records this machine's or `ZS_ANY_MACHINE` asks to compare anyway.
+   * Limits recorded on another machine aren't checked here, unless `-u`
+   * records this machine's in their place.
    *
    * A scenario whose page logged `errors` is none of this: numbers from a run
    * that broke halfway can look faster, and would lower its limits for good.
@@ -274,11 +277,10 @@ class ZeroSpikesFixture {
     const base = { kind, key, test, name, project, metrics, environment, ...(overTarget.length ? { overTarget } : {}) };
     if (inCompareSession()) return { ...base, limits: null, status: "measured", violations: [] };
     const derived = deriveLimits(worst, frameMs);
-    const mode = process.env.ZS_UPDATE ? "all" : this.testInfo.config.updateSnapshots;
+    const mode = this.testInfo.config.updateSnapshots;
     const updating = mode === "all" || mode === "changed";
     const stored = this.store.get(key);
-    const otherMachine =
-      stored?.environment && !process.env.ZS_ANY_MACHINE ? environmentDifferences(stored.environment, environment) : [];
+    const otherMachine = stored ? environmentDifferences(stored.environment, environment) : [];
     let limits: Metrics | null = stored?.limits ?? null;
     let status: ScenarioResult["status"];
     let violations: Violation[] = [];

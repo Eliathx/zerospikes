@@ -22,13 +22,9 @@ test("resize a column", async ({ page, zs }) => {
   const box = (await page.getByTestId("resize-name").boundingBox())!;
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
-  let widened = false;
   await zs.measure("drag the «Client» border", () => zs.drag([x, y], [x + 160, y]), {
     // Put the column back between runs, unmeasured.
-    before: async () => {
-      if (widened) await zs.drag([x + 160, y], [x, y], { steps: 2 });
-      widened = true;
-    },
+    after: () => zs.drag([x + 160, y], [x, y], { steps: 2 }),
   });
 });
 

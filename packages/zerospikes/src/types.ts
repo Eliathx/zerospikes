@@ -8,14 +8,15 @@ export type Phase = "down" | "move" | "up" | "click" | "key" | "wheel";
 /**
  * What `measure` reports, in ms unless named otherwise:
  * - `frame.max`: longest gap between two frames while the interaction ran
- * - `frame.p95`: 95th percentile of those gaps
  * - `frame.slow`: frames longer than two display frames (> 33.4 ms)
  * - `frame.long`: long animation frames (> 50 ms) from the LoAF API; Chromium only
- * - `input.<phase>`: worst time from an input event to the next frame, per phase
+ * - `input.<phase>`: worst time from an input event to the next frame, per phase.
+ *   `input.click` only for a click without a pointerup before it (a key on a
+ *   button): after a pointerup it lands in the same frame, and `input.up` has it
  * - `cpu.main`: time the main thread spent running while the interaction ran, other
  *   processes' time left out, so it holds still on a busy machine; Chromium only
  */
-export type InteractionMetric = "frame.max" | "frame.p95" | "frame.slow" | "frame.long" | `input.${Phase}` | "cpu.main";
+export type InteractionMetric = "frame.max" | "frame.slow" | "frame.long" | `input.${Phase}` | "cpu.main";
 
 /**
  * What `cycles` reports: what stayed behind after the cycles, compared with
@@ -33,7 +34,6 @@ export type Metrics = Partial<Record<MetricName, number>>;
 
 export const INTERACTION_METRICS: readonly InteractionMetric[] = [
   "frame.max",
-  "frame.p95",
   "frame.slow",
   "frame.long",
   "input.down",
@@ -54,6 +54,8 @@ export interface MeasureOptions {
   warmup?: number;
   /** Runs before every repetition (warm-up included), unmeasured: put the page back in its starting state. */
   before?: () => Promise<void>;
+  /** Runs after every repetition (warm-up included), unmeasured: undo what `act` did. */
+  after?: () => Promise<void>;
   /** Time to keep recording after the action returns, so trailing work (debounces, commits) counts. Default 300. */
   settleMs?: number;
   /** Fixed limits, checked against the medians on top of the recorded ones: `{ "frame.max": 50 }`. */
@@ -142,6 +144,8 @@ export interface ScenarioResult {
   environment?: Environment;
   /** For `unchecked`: what differs from where the limits were recorded, as `field: recorded → current`. */
   otherMachine?: string[];
+  /** The display frame measured while it ran, in ms: frame and input limits leave room in whole frames of it. */
+  frameMs?: number;
   /** Each measured run's metrics; `metrics` holds their medians. */
   runs?: Metrics[];
   /** Median split of `cpu.main` across the measured runs. */

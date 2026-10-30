@@ -22,13 +22,13 @@ test("filter as you type", async ({ page, zs }) => {
   ...
 
   zerospikes  6 scenarios · 1 over limits · 1 limits recorded
-  FAIL    sort by client › click the header   input down/move/up/click 351 ms > 87, frame.max 346 ms > 83
+  FAIL    sort by client › click the header   input down/move/up 351 ms > 87, frame.max 346 ms > 83
 
   Details, trends and limits: npx zerospikes
 ```
 
 The test itself fails with the same detail, the path of the limits file and
-how to accept an intended change (`npx playwright test -u`).
+how to accept an intended change.
 
 ## The zerospikes command
 
@@ -58,27 +58,39 @@ Without a terminal, or with `--print`, it prints the scenario list once.
 | Metric | What it is |
 |---|---|
 | `frame.max` | Longest gap between two frames while the scenario ran |
-| `frame.p95` | 95th percentile of the frame gaps |
 | `frame.slow` | Frames longer than two display frames (> 33.4 ms) |
 | `frame.long` | Long animation frames (> 50 ms) from the LoAF API, Chromium only |
 | `input.down` / `input.move` / `input.up` | Worst time from a pointer event to the next frame, per phase of a gesture. `pointermove` is included |
-| `input.click` / `input.key` / `input.wheel` | Same for clicks, key presses and wheel steps |
+| `input.key` / `input.wheel` / `input.click` | Same for key presses, wheel steps and clicks. A click after a pointerup is already in `input.up`: `input.click` only shows for one without it, such as Enter on a button |
 | `memory.heapMB` / `memory.nodes` / `memory.listeners` | For `zs.cycles`: what stays behind after N cycles, with GC forced before every sample. Chromium only |
 
 ## Limits
 
 1. Run `npx playwright test`. The first time, each scenario saves how fast it
-   is to `__limits__/<spec>.json`. Commit that file.
-2. From then on, a scenario fails if it gets slower than what was saved. In
-   your CI pipeline, run `npx playwright test --update-snapshots=none` so it
-   only checks and never saves.
-3. If you made it slower on purpose, press `w` on it in `npx zerospikes` (or
-   run `npx playwright test -u`) to save the new numbers, and commit them.
-4. If you made it faster, press `t` in `npx zerospikes` (or run
-   `npx playwright test --update-snapshots=all`) so the faster numbers become
-   the new limits.
+   is to `__limits__/<spec>.json`, with the machine it ran on.
+2. From then on, a scenario fails if it gets slower than what was saved.
+3. If you made it faster, press `t` in `npx zerospikes` (or run
+   `npx playwright test -u`) so the faster numbers become the new limits.
+   Recording again only ever lowers a limit: `-u` never lets a slower
+   scenario pass.
+4. If you made it slower on purpose, press `w` on it in `npx zerospikes` (or
+   run `ZS_ALLOW_WORSE=1 npx playwright test -u`) to save the slower numbers.
 
 You can also set fixed limits yourself: `{ limits: { "frame.max": 50 } }`.
+They are checked on every machine.
+
+### On your machine, and in CI
+
+Recorded limits only hold on the machine that recorded them: the same CPU,
+browser version and display rate. Anywhere else a scenario shows as `not
+checked` and passes, and `-u` records that machine's limits in place of the
+saved ones. Commit `__limits__` when one machine, or one fixed CI runner,
+records them for everyone.
+
+CI runners that change hardware from run to run can't keep limits. There, use
+`npx zerospikes compare --baseline <url> --candidate <url>`: it measures both
+builds on the same runner, in alternating sessions, and fails when the
+candidate is slower.
 
 ## Errors in the page
 
@@ -108,7 +120,7 @@ export default defineConfig<ZeroSpikesOptions>({
 ## API
 
 ```ts
-zs.measure(name, act, { runs, warmup, before, settleMs, limits, profileOnFail })
+zs.measure(name, act, { runs, warmup, before, after, settleMs, limits, profileOnFail })
 zs.cycles(name, cycle, { cycles, warmup, limits })   // memory
 zs.drag([x, y], [x2, y2], { steps })                 // one pointermove per frame
 zs.frame()                                           // wait for the next frame
@@ -184,7 +196,7 @@ live meter, to feel the mistakes by hand.
 | Mistake | What it does | What fails |
 |---|---|---|
 | `filter` | Serializes every row on each key press instead of using the search index | `input.key`, `frame.max` (~2x) |
-| `sort` | Strips accents on every comparison instead of once per row | `input.click`, `frame.max` (~4x) |
+| `sort` | Strips accents on every comparison instead of once per row | `input.up`, `frame.max` (~4x) |
 | `resize` | Re-measures every cell each time a column drag starts | `input.down` only (~7x) |
 | `leak` | The detail panel leaves its listener and DOM behind when it closes | `memory.nodes`, `memory.listeners` |
 

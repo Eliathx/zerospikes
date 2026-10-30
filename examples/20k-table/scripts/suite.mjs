@@ -39,10 +39,10 @@ export function runSuite(testTitle) {
  */
 export const SLOWDOWN_TARGETS = [
   { id: "filter", test: "filter as you type", event: "keydown", metric: "input.key" },
-  { id: "sort", test: "sort by client", event: "click", metric: "input.click" },
+  { id: "sort", test: "sort by client", event: "click", metric: "input.up" },
   { id: "resize", test: "resize a column", event: "pointermove", metric: "input.move" },
   { id: "scroll", test: "scroll the grid", event: "wheel", metric: "input.wheel" },
-  { id: "detail", test: "open the detail panel", event: "click", metric: "input.click" },
+  { id: "detail", test: "open the detail panel", event: "click", metric: "input.up" },
 ];
 
 /** Median latency of each target over `runs` suite runs of the current build: target id → ms. */

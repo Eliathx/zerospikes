@@ -16,12 +16,6 @@ const PHASE: Record<string, Phase> = {
 /** One decimal: finer than any of these measurements can resolve. */
 export const round = (n: number) => Math.round(n * 10) / 10;
 
-export function quantile(values: number[], q: number): number {
-  if (!values.length) return 0;
-  const s = [...values].sort((a, b) => a - b);
-  return s[Math.min(s.length - 1, Math.ceil(q * s.length) - 1)];
-}
-
 export function median(values: number[]): number {
   if (!values.length) return 0;
   const s = [...values].sort((a, b) => a - b);
@@ -35,7 +29,6 @@ export function runMetrics(recording: RawRecording): Metrics {
   for (let i = 1; i < recording.frames.length; i++) gaps.push(recording.frames[i] - recording.frames[i - 1]);
   const metrics: Metrics = {
     "frame.max": round(gaps.length ? Math.max(...gaps) : 0),
-    "frame.p95": round(quantile(gaps, 0.95)),
     "frame.slow": gaps.filter((g) => g > SLOW_FRAME_MS).length,
   };
   if (recording.longFrames) metrics["frame.long"] = recording.longFrames.length;
@@ -43,6 +36,8 @@ export function runMetrics(recording: RawRecording): Metrics {
     const phase = PHASE[type];
     if (phase) metrics[`input.${phase}`] = round(Math.max(metrics[`input.${phase}`] ?? 0, ms));
   }
+  // A click after a pointerup is handled before the frame the pointerup waits for: the same time, said twice.
+  if (metrics["input.up"] !== undefined) delete metrics["input.click"];
   return metrics;
 }
 

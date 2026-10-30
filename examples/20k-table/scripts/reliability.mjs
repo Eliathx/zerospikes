@@ -60,7 +60,7 @@ function emptyTally(test) {
  */
 function tally(scenario, result) {
   scenario.runs++;
-  scenario.measurements.push({ metrics: result.metrics, runs: result.runs, samples: result.samples });
+  scenario.measurements.push({ metrics: result.metrics, frameMs: result.frameMs, runs: result.runs, samples: result.samples });
   if (result.status === "fail") scenario.failures++;
   for (const violation of result.violations) {
     scenario.failedMetrics[violation.metric] = (scenario.failedMetrics[violation.metric] ?? 0) + 1;

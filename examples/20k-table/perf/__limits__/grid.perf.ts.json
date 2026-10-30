@@ -12,7 +12,6 @@
   "limits": {
     "chromium › filter as you type › type «mar»": {
       "frame.max": 26,
-      "frame.p95": 19,
       "frame.slow": 1,
       "frame.long": 1,
       "input.key": 35,
@@ -25,29 +24,24 @@
     },
     "chromium › open the detail panel › click a row": {
       "frame.max": 19,
-      "frame.p95": 19,
       "frame.slow": 1,
       "frame.long": 1,
       "input.move": 22,
       "input.down": 22,
       "input.up": 21,
-      "input.click": 21,
       "cpu.main": 36
     },
     "chromium › resize a column › drag the «Client» border": {
       "frame.max": 26,
-      "frame.p95": 19,
       "frame.slow": 1,
       "frame.long": 1,
       "input.move": 21,
       "input.down": 18,
       "input.up": 17,
-      "input.click": 17,
       "cpu.main": 197
     },
     "chromium › scroll the grid › 15 wheel steps": {
       "frame.max": 26,
-      "frame.p95": 19,
       "frame.slow": 1,
       "frame.long": 1,
       "input.wheel": 40,
@@ -55,13 +49,11 @@
     },
     "chromium › sort by client › click the header": {
       "frame.max": 146,
-      "frame.p95": 19,
       "frame.slow": 3,
       "frame.long": 3,
       "input.move": 157,
       "input.down": 157,
       "input.up": 157,
-      "input.click": 157,
       "cpu.main": 126
     }
   },
