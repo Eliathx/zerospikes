@@ -16,7 +16,7 @@ import { test } from "zerospikes";
 test("filter as you type", async ({ page, zs }) => {
   await page.goto("/");
   const search = page.getByRole("searchbox");
-  await zs.measure("type «mar»", () => search.pressSequentially("mar"), {
+  await zs.measure("type 'mar'", () => search.pressSequentially("mar"), {
     before: () => search.fill(""), // unmeasured: back to the start before each run
   });
 });

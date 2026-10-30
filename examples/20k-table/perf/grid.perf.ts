@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
 
 test("filter as you type", async ({ page, zs }) => {
   const search = page.getByRole("searchbox", { name: "Search" });
-  await zs.measure("type «mar»", () => search.pressSequentially("mar"), {
+  await zs.measure("type 'mar'", () => search.pressSequentially("mar"), {
     before: () => search.fill(""),
   });
 });
@@ -22,7 +22,7 @@ test("resize a column", async ({ page, zs }) => {
   const box = (await page.getByTestId("resize-name").boundingBox())!;
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
-  await zs.measure("drag the «Client» border", () => zs.drag([x, y], [x + 160, y]), {
+  await zs.measure("drag the 'Client' border", () => zs.drag([x, y], [x + 160, y]), {
     // Put the column back between runs, unmeasured.
     after: () => zs.drag([x + 160, y], [x, y], { steps: 2 }),
   });

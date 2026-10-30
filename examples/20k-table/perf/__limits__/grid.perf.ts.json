@@ -10,7 +10,7 @@
     }
   },
   "limits": {
-    "chromium › filter as you type › type «mar»": {
+    "chromium › filter as you type › type 'mar'": {
       "frame.max": 26,
       "frame.slow": 1,
       "frame.long": 1,
@@ -31,7 +31,7 @@
       "input.up": 21,
       "cpu.main": 36
     },
-    "chromium › resize a column › drag the «Client» border": {
+    "chromium › resize a column › drag the 'Client' border": {
       "frame.max": 26,
       "frame.slow": 1,
       "frame.long": 1,
@@ -58,10 +58,10 @@
     }
   },
   "recordedOn": {
-    "chromium › filter as you type › type «mar»": "1gf0u5r",
+    "chromium › filter as you type › type 'mar'": "1gf0u5r",
     "chromium › memory when opening and closing details › open and close 10 invoices": "1gf0u5r",
     "chromium › open the detail panel › click a row": "1gf0u5r",
-    "chromium › resize a column › drag the «Client» border": "1gf0u5r",
+    "chromium › resize a column › drag the 'Client' border": "1gf0u5r",
     "chromium › scroll the grid › 15 wheel steps": "1gf0u5r",
     "chromium › sort by client › click the header": "1gf0u5r"
   }

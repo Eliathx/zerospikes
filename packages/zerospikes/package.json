@@ -12,7 +12,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "zerospikes": "./dist/cli.js"
+    "zerospikes": "dist/cli.js"
   },
   "types": "./dist/index.d.ts",
   "exports": {
