@@ -1,6 +1,6 @@
 {
   "name": "zerospikes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Performance limits for Playwright: frame times, input latency and memory, recorded like snapshots.",
   "license": "MIT",
   "repository": {

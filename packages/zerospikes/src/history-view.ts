@@ -288,14 +288,15 @@ export function runsPane(history: ScenarioHistory, metric: MetricName, selectedR
  * the view says what can be lowered on its own line, with the key for it, so
  * it leaves that out with `withLowerable` false.
  */
-export const runSummary = (scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true) =>
-  summaryParts(scenarios, overTarget, withLowerable).join(dim(" · "));
+export const runSummary = (scenarios: Pick<IndexedScenario, "status" | "tighter">[], withLowerable = true) =>
+  summaryParts(scenarios, withLowerable).join(dim(" · "));
 
 /**
  * `runSummary`'s parts, the second always the verdict: over limits, with
- * errors, or all within limits, which a run with errors can't claim.
+ * errors, or all within limits, which a run with errors can't claim. Counts
+ * after it are scenarios, named like their statuses in the list.
  */
-export function summaryParts(scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true): string[] {
+export function summaryParts(scenarios: Pick<IndexedScenario, "status" | "tighter">[], withLowerable = true): string[] {
   const count = (status: IndexedScenario["status"]) => scenarios.filter((scenario) => scenario.status === status).length;
   const lowerable = scenarios.filter((scenario) => scenario.tighter && metricNames(scenario.tighter).length).length;
   const parts = [`${scenarios.length} ${scenarios.length === 1 ? "scenario" : "scenarios"}`];
@@ -303,10 +304,10 @@ export function summaryParts(scenarios: Pick<IndexedScenario, "status" | "tighte
   parts.push(count("fail") ? red(`${count("fail")} over limits`) : count("error") ? withErrors : green("all within limits"));
   if (count("fail") && count("error")) parts.push(withErrors);
   // Grey like their statuses: yellow is kept for lag.
-  if (count("recorded")) parts.push(dim(`${count("recorded")} limits recorded`));
-  if (count("updated")) parts.push(dim(`${count("updated")} limits updated`));
-  if (count("unchecked")) parts.push(dim(`${count("unchecked")} not checked (limits from another machine)`));
-  if (overTarget) parts.push(yellow(`${overTarget} over target`));
+  if (count("recorded")) parts.push(dim(`${count("recorded")} new`));
+  if (count("updated")) parts.push(dim(`${count("updated")} updated`));
+  // Easy to miss and easy to cause, by upgrading Playwright: says how to get the checks back.
+  if (count("unchecked")) parts.push(yellow(`${count("unchecked")} not checked (other machine or browser: run -u)`));
   if (lowerable && withLowerable) parts.push(cyan(`${lowerable} can be lowered`));
   return parts;
 }
@@ -358,19 +359,36 @@ const FAILURE_WORD_WIDTH = 5;
 /** An error's message runs on where a list of misses doesn't: cut here. */
 const MAX_FAILURE_TEXT_WIDTH = 120;
 
-/** One line per failed or broken scenario in `results`, names lined up, each after `indent`. */
-export function failureLines(results: ScenarioResult[], indent: string): string[] {
+/**
+ * One line per failed or broken scenario in `results`, names lined up, each
+ * after `indent`. With `hot`, each failure is followed by the functions its
+ * profiled run spent the most time in, cut to `width`.
+ */
+export function failureLines(results: ScenarioResult[], indent: string, hot?: { width: number }): string[] {
   const failed = results.filter(isFailure);
   const label = (r: ScenarioResult) => `${r.test} › ${r.name}`;
   const width = Math.min(MAX_FAILURE_NAME_WIDTH, Math.max(0, ...failed.map((r) => [...label(r)].length)));
-  return failed.map((r) => {
+  return failed.flatMap((r) => {
     const word = padEnd(STATUS_WORD[r.status], FAILURE_WORD_WIDTH);
-    return `${indent}${word}  ${padEnd(truncate(label(r), width), width)}   ${red(truncate(missesOf(r), MAX_FAILURE_TEXT_WIDTH))}`;
+    const line = `${indent}${word}  ${padEnd(truncate(label(r), width), width)}   ${red(truncate(missesOf(r), MAX_FAILURE_TEXT_WIDTH))}`;
+    return hot ? [line, ...hotFunctionLines(r, `${indent}  `, hot.width)] : [line];
   });
 }
 
-/** Functions the open scenario names from its profiled run. */
+/** Functions a failure names from its profiled run. */
 const SHOWN_HOT_FUNCTIONS = 3;
+
+/** A failure's slowest functions, one per line after `indent`: `319 ms  sortRows  index.js:11740`. */
+function hotFunctionLines(result: ScenarioResult, indent: string, width: number): string[] {
+  const hot = (result.hot ?? []).slice(0, SHOWN_HOT_FUNCTIONS).map((h) => ({ ms: `${formatNumber(h.selfMs)} ms`, ...splitLocation(h.fn) }));
+  if (!hot.length) return [];
+  const nameWidth = Math.max(...hot.map((h) => h.name.length));
+  return hot.map((h) => {
+    const head = `${indent}${padStart(h.ms, 9)}  ${padEnd(h.name, nameWidth)}  `;
+    // Cut before colouring, so no colour code is cut.
+    return head + dim(truncate(h.location, Math.max(10, width - visibleWidth(head) - 1)));
+  });
+}
 /** Errors the open scenario lists; the test's own failure has them all. */
 const SHOWN_ERRORS = 5;
 /** A profile names a function as `name @ file:line`. */
@@ -379,7 +397,7 @@ const LOCATION_SEPARATOR = " @ ";
 /**
  * What the latest run of an open scenario found beyond its numbers, each
  * under a label that says what it is, cut to `width`: limits it missed that
- * the limit column doesn't show, targets it lags behind, why it wasn't
+ * the limit column doesn't show, the times past what feels instant, why it wasn't
  * compared, and, for a failure, the functions it spent its time in. A
  * scenario whose page logged errors shows them alone: nothing else it measured holds.
  */
@@ -393,19 +411,25 @@ export function scenarioDetails(result: ScenarioResult, width: number): string[]
   if (fixed.length) lines.push(labelled("Over its fixed limit", red, formatMisses(fixed)));
   if (result.overTarget?.length) {
     const misses = result.overTarget.map(({ metric, value, target }) => ({ metric, value, limit: target }));
-    lines.push(labelled("Over target", yellow, formatMisses(misses)), dim("  A warning only: the limits decide pass or fail."));
+    lines.push(
+      labelled("Feels slow", yellow, formatMisses(misses)),
+      dim("  Past 50 ms a response stops feeling instant. A note only: the limits decide pass or fail."),
+    );
   }
-  if (result.otherMachine?.length) lines.push(labelled("Not checked", dim, `its limits are from another machine (${result.otherMachine.join(", ")})`));
+  if (result.otherMachine?.length) {
+    lines.push(
+      labelled("Not checked", yellow, `its limits are from another machine or browser (${result.otherMachine.join(", ")})`),
+      dim("  Run with -u to record limits for this one."),
+    );
+  }
   if (result.samples?.length) lines.push(labelled("Per cycle", dim, result.samples.map((sample) => `${sample.domNodes} nodes`).join(" → ")));
   if (result.hot?.length) {
-    const hot = result.hot.slice(0, SHOWN_HOT_FUNCTIONS).map((h) => ({ ms: `${formatNumber(h.selfMs)} ms`, ...splitLocation(h.fn) }));
-    const nameWidth = Math.max(...hot.map((h) => h.name.length));
     if (lines.length) lines.push("");
     lines.push(
       `  ${bold("Where the time went")}`,
       dim(`  ${truncate("Time in each function's own code, from one more run profiled because it failed.", width - 3)}`),
+      ...hotFunctionLines(result, "    ", width),
     );
-    for (const h of hot) lines.push(`    ${padStart(h.ms, 9)}  ${padEnd(h.name, nameWidth)}  ${dim(h.location)}`);
   }
   if (result.profilePath) {
     const path = relative(process.cwd(), result.profilePath) || result.profilePath;

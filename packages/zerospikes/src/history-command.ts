@@ -208,13 +208,23 @@ function lastRunBox(state: State, runs: IndexedRun[], lowerable: number, width: 
   if (!latest) return [];
   const results = fullRun(state, latest)?.results ?? [];
   const failed = results.filter(isFailure);
-  const overTarget = results.filter((result) => result.overTarget?.length).length;
-  const [count, verdict, ...rest] = summaryParts(Object.values(latest.scenarios), overTarget, false);
+  const [count, verdict, ...rest] = summaryParts(Object.values(latest.scenarios), false);
   const boxWidth = Math.min(width - BOX_MARGIN.length - 1, LAST_RUN_MAX_WIDTH);
   // Inside the borders, a space of padding on each side.
   const room = boxWidth - 4;
   const mark = Object.values(latest.scenarios).some(isFailure) ? red("✗") : green("✓");
-  const lines = [`${mark} ${bold(verdict)}   ${[count, ...rest].map((part) => dim(part)).join(dim(" · "))}`];
+  // The counts after the verdict, onto more lines when they don't fit the box.
+  const lines: string[] = [];
+  let line = `${mark} ${bold(verdict)}   ${dim(count)}`;
+  for (const part of rest.map((part) => dim(part))) {
+    const joined = `${line}${dim(" · ")}${part}`;
+    if (visibleWidth(joined) <= room - 2) line = joined;
+    else {
+      lines.push(line);
+      line = `  ${part}`;
+    }
+  }
+  lines.push(line);
   for (const result of failed.slice(0, SHOWN_FAILURES)) {
     lines.push("", `${red("✗")} ${bold(truncate(`${result.test} › ${result.name}`, room - 2))}`, `  ${red(truncate(missesOf(result), room - 2))}`);
   }

@@ -162,8 +162,32 @@ test("r runs from the list only, and the run holds the list until it ends", () =
 });
 
 test("a run's summary counts what failed and what can be lowered", () => {
-  const summary = runSummary([{ status: "pass", tighter: { "cpu.main": 40 } }, { status: "fail" }, { status: "unchecked" }]);
-  assert.equal(summary, "3 scenarios · 1 over limits · 1 not checked (limits from another machine) · 1 can be lowered");
+  const summary = runSummary([{ status: "pass", tighter: { "cpu.main": 40 } }, { status: "fail" }, { status: "unchecked" }, { status: "recorded" }]);
+  assert.equal(
+    summary,
+    "4 scenarios · 1 over limits · 1 new · 1 not checked (other machine or browser: run -u) · 1 can be lowered",
+  );
+});
+
+test("the reporter's failure lines name the functions that took the time", async () => {
+  const { failureLines } = await import("../dist/history-view.js");
+  const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const slow = {
+    test: "sort",
+    name: "click",
+    status: "fail",
+    violations: [{ metric: "cpu.main", value: 252, limit: 126, source: "recorded" }],
+    hot: [
+      { fn: "sortRows @ index.js:11738", selfMs: 319 },
+      { fn: "(anonymous) @ index.js:20", selfMs: 28.5 },
+    ],
+  };
+  assert.deepEqual(failureLines([slow], "  ", { width: 120 }).map(plain), [
+    "  FAIL   sort › click   cpu.main 252 ms > 126",
+    "       319 ms  sortRows     index.js:11738",
+    "      28.5 ms  (anonymous)  index.js:20",
+  ]);
+  assert.equal(failureLines([slow], "  ").length, 1);
 });
 
 test("a run started with r counts the tests it ends, and says so when it saves nothing", async () => {

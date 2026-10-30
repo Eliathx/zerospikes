@@ -58,7 +58,9 @@ export function runCompareCommand(rest: string[]): never {
     },
     playwrightArgs: separator === -1 ? [] : rest.slice(separator + 1),
     cwd: process.cwd(),
-    onSession: (side, round) => process.stdout.write(`\r  session ${round + 1} ${side}…   `),
+    // Rewritten in place in a terminal; a line each in a CI log, where `\r` doesn't go back.
+    onSession: (side, round) =>
+      process.stdout.write(process.stdout.isTTY ? `\r  session ${round + 1} ${side}…   ` : `  session ${round + 1} ${side}\n`),
   });
 
   console.log("\n" + formatComparisons(comparisons));

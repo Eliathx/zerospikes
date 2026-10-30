@@ -100,8 +100,9 @@ export default class ZeroSpikesReporter implements Reporter {
       return;
     }
     if (!this.results.length) return;
-    const overTarget = this.results.filter((r) => r.overTarget?.length).length;
-    const lines = ["", `  ${bold("zerospikes")}  ${runSummary(this.results, overTarget)}`, ...failureLines(this.results, "  ")];
+    // Each failure with the functions that took the time: CI has no `npx zerospikes` to open.
+    const hot = { width: process.stdout.columns || 120 };
+    const lines = ["", `  ${bold("zerospikes")}  ${runSummary(this.results)}`, ...failureLines(this.results, "  ", hot)];
     lines.push("", dim("  Details, trends and limits: npx zerospikes"), "");
 
     const dir = resolve(this.rootDir, this.options.outputDir ?? "zerospikes-results");
