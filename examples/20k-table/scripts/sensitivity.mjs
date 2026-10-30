@@ -1,4 +1,4 @@
-// Finds how large a regression must be before the committed budgets catch it.
+// Finds how large a regression must be before the committed limits catch it.
 // Measures each scenario's input latency on a clean build, then rebuilds with
 // src/slowdown.ts adding (factor − 1) × that latency of main-thread work to each
 // of the scenario's events, and counts how often the scenario fails per factor.
@@ -33,11 +33,11 @@ function measureFactor(scenario, factor, baseline) {
   const addedMs = roundTo((factor - 1) * baseline, 1);
   progress(`\n${scenario.id} ×${factor} (+${addedMs} ms per ${scenario.event}): `);
   buildWithSlowdown(scenario.event, addedMs);
-  const outcome = { addedMs, runs: 0, failures: 0, failedMetrics: {}, latencies: [], budget: null, measurements: [] };
+  const outcome = { addedMs, runs: 0, failures: 0, failedMetrics: {}, latencies: [], limit: null, measurements: [] };
   for (let run = 0; run < runsPerFactor; run++) {
     const result = runSuite(scenario.test).find((candidate) => candidate.test === scenario.test);
     outcome.runs++;
-    outcome.budget ??= result.budget?.[scenario.metric] ?? null;
+    outcome.limit ??= result.limits?.[scenario.metric] ?? null;
     outcome.latencies.push(result.metrics[scenario.metric]);
     outcome.measurements.push({ metrics: result.metrics, runs: result.runs });
     if (result.status === "fail") outcome.failures++;
@@ -56,11 +56,11 @@ try {
   build();
   const baselines = measureLatencies(scenarios, Number(options["baseline-runs"]));
   for (const scenario of scenarios) {
-    const entry = { ...scenario, baselineMs: baselines[scenario.id], budgetMs: null, factors: {} };
+    const entry = { ...scenario, baselineMs: baselines[scenario.id], limitMs: null, factors: {} };
     report.scenarios[scenario.id] = entry;
     for (const factor of factors) {
       entry.factors[factor] = measureFactor(scenario, factor, entry.baselineMs);
-      entry.budgetMs ??= entry.factors[factor].budget;
+      entry.limitMs ??= entry.factors[factor].limit;
     }
   }
 } finally {
@@ -73,7 +73,7 @@ const isCaught = (outcome) => outcome.failures / outcome.runs >= CAUGHT_FAILURE_
 const column = (text) => text.padEnd(TABLE_COLUMN_WIDTH);
 
 console.log("\n");
-console.log(column("scenario") + column("baseline→budget") + factors.map((factor) => column(`×${factor}`)).join("") + "caught from");
+console.log(column("scenario") + column("baseline→limit") + factors.map((factor) => column(`×${factor}`)).join("") + "caught from");
 for (const entry of Object.values(report.scenarios)) {
   const cells = factors.map((factor) => {
     const outcome = entry.factors[factor];
@@ -81,7 +81,7 @@ for (const entry of Object.values(report.scenarios)) {
   });
   const caughtFrom = factors.find((factor) => isCaught(entry.factors[factor]));
   console.log(
-    column(entry.id) + column(`${roundTo(entry.baselineMs, 1)}→${entry.budgetMs} ms`) + cells.join("") + (caughtFrom ? `×${caughtFrom}` : "never"),
+    column(entry.id) + column(`${roundTo(entry.baselineMs, 1)}→${entry.limitMs} ms`) + cells.join("") + (caughtFrom ? `×${caughtFrom}` : "never"),
   );
 }
 console.log("\ncells: failed runs / runs, median input latency reached");

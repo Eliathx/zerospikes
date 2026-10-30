@@ -7,7 +7,7 @@ import { MAX_FILE_BYTES, readHistoryFile, readIndex, readLatestRun, readRun, rec
 
 const SCENARIO = "chromium › sort › click";
 const git = { commit: "ae42f99", branch: "main", dirty: false };
-const runAt = (date, status = "pass") => ({ date, git, results: [{ key: SCENARIO, status, metrics: { "frame.max": 40 }, budget: { "frame.max": 51 } }] });
+const runAt = (date, status = "pass") => ({ date, git, results: [{ key: SCENARIO, status, metrics: { "frame.max": 40 }, limits: { "frame.max": 51 } }] });
 const emptyDir = () => mkdtempSync(join(tmpdir(), "zs-history-"));
 
 test("each run is saved compressed and indexed with its commit", () => {
@@ -19,7 +19,7 @@ test("each run is saved compressed and indexed with its commit", () => {
 
   const [first, second] = readIndex(dir).runs;
   assert.deepEqual(first.git, git);
-  assert.deepEqual(second.scenarios[SCENARIO], { status: "fail", metrics: { "frame.max": 40 }, budget: { "frame.max": 51 } });
+  assert.deepEqual(second.scenarios[SCENARIO], { status: "fail", metrics: { "frame.max": 40 }, limits: { "frame.max": 51 } });
   assert.equal(readRun(dir, first).date, "2026-10-24T10:00:00.000Z");
   assert.equal(readLatestRun(dir).date, "2026-10-26T09:00:00.000Z");
 });

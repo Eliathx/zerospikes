@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readLatestRun } from "zerospikes/history";
+// Not part of the package's API: the history is read straight from its build.
+import { readLatestRun } from "../../../packages/zerospikes/dist/history.js";
 
 export const exampleDir = dirname(import.meta.dirname);
 const resultsDir = join(exampleDir, "zerospikes-results");
@@ -21,7 +22,7 @@ export function build(env = {}) {
   if (result.status !== 0) throw new Error(`Build failed:\n${result.stdout}\n${result.stderr}`);
 }
 
-/** Runs the perf suite against the committed budgets, never recording; returns the scenario results the reporter saved. */
+/** Runs the perf suite against the committed limits, never recording; returns the scenario results the reporter saved. */
 export function runSuite(testTitle) {
   const before = readLatestRun(resultsDir)?.date;
   const run = shell(`npx playwright test --update-snapshots=none${testTitle ? ` --grep "${testTitle}"` : ""}`);

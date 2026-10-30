@@ -34,7 +34,7 @@ export const STATUS_WORD: Record<ScenarioResult["status"], string> = {
   pass: green("PASS"),
   fail: red("FAIL"),
   error: red("ERROR"),
-  // Grey, not yellow: these say a budget wasn't checked, and yellow warns of lag.
+  // Grey, not yellow: these say limits weren't checked, and yellow warns of lag.
   recorded: dim("NEW"),
   updated: dim("UPDATED"),
   measured: dim("MEASURED"),

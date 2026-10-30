@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { aggregate, median, quantile, runMetrics, worstOf } from "../dist/stats.js";
-import { BudgetStore, check, deriveLimit, overTargets, tighten, tighterLimits, validateLimits } from "../dist/budgets.js";
+import { LimitStore, check, deriveLimit, overTargets, tighten, tighterLimits, validateLimits } from "../dist/limits.js";
 import { INTERACTION_METRICS } from "../dist/types.js";
 
 test("runMetrics turns frame timestamps and inputs into per-phase numbers", () => {
@@ -36,7 +36,7 @@ test("aggregate takes the median per metric, ignoring runs without it", () => {
   assert.deepEqual(out, { "frame.max": 17, "input.key": 35 });
 });
 
-test("worstOf keeps the highest value per metric, the basis for new budgets", () => {
+test("worstOf keeps the highest value per metric, the basis for new limits", () => {
   const out = worstOf([{ "frame.max": 16 }, { "frame.max": 40, "input.key": 30 }, { "frame.max": 17 }]);
   assert.deepEqual(out, { "frame.max": 40, "input.key": 30 });
 });
@@ -83,8 +83,8 @@ test("overTargets warns about frames and inputs over 50 ms, not about counts or 
 });
 
 test("check reports only metrics over their limit", () => {
-  const v = check({ "frame.max": 40, "input.move": 10 }, { "frame.max": 34, "input.move": 34, "input.key": 1 }, "budget");
-  assert.deepEqual(v, [{ metric: "frame.max", value: 40, limit: 34, source: "budget" }]);
+  const v = check({ "frame.max": 40, "input.move": 10 }, { "frame.max": 34, "input.move": 34, "input.key": 1 }, "recorded");
+  assert.deepEqual(v, [{ metric: "frame.max", value: 40, limit: 34, source: "recorded" }]);
 });
 
 test("validateLimits rejects a misspelled metric", () => {
@@ -99,14 +99,14 @@ test("validateLimits rejects a limit on a metric the scenario didn't produce", (
   validateLimits("click", { "input.click": 50 }, INTERACTION_METRICS, { "input.click": 5 });
 });
 
-test("BudgetStore keeps budgets sorted next to the spec", () => {
+test("LimitStore keeps limits sorted next to the spec", () => {
   const dir = mkdtempSync(join(tmpdir(), "zs-"));
-  const store = BudgetStore.forSpec(join(dir, "grid.perf.ts"));
+  const store = LimitStore.forSpec(join(dir, "grid.perf.ts"));
   const machine = { cpu: "test", cores: 1, platform: "linux-x64", browser: "chromium 140", headless: true };
   store.set("b", { "frame.max": 1 }, machine);
   store.set("a", { "frame.max": 2 }, machine);
-  assert.equal(store.path, join(dir, "__budgets__", "grid.perf.ts.json"));
-  assert.deepEqual(store.get("a"), { budget: { "frame.max": 2 }, environment: machine });
-  assert.deepEqual(BudgetStore.forSpec(join(dir, "grid.perf.ts")).get("b")?.budget, { "frame.max": 1 });
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(store.path, "utf8")).budgets), ["a", "b"]);
+  assert.equal(store.path, join(dir, "__limits__", "grid.perf.ts.json"));
+  assert.deepEqual(store.get("a"), { limits: { "frame.max": 2 }, environment: machine });
+  assert.deepEqual(LimitStore.forSpec(join(dir, "grid.perf.ts")).get("b")?.limits, { "frame.max": 1 });
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(store.path, "utf8")).limits), ["a", "b"]);
 });

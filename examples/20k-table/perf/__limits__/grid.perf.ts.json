@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "environments": {
     "1gf0u5r": {
       "cpu": "AMD Ryzen 5 3500 6-Core Processor",
@@ -9,7 +9,7 @@
       "headless": true
     }
   },
-  "budgets": {
+  "limits": {
     "chromium › filter as you type › type «mar»": {
       "frame.max": 26,
       "frame.p95": 19,

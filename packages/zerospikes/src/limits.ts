@@ -6,7 +6,7 @@ import { metricNames } from "./stats.js";
 import type { MetricName, Metrics, TargetMiss, Violation } from "./types.js";
 
 /**
- * Turns the worst value seen while recording into a budget, with the room
+ * Turns the worst value seen while recording into a limit, with the room
  * `SLACK` leaves for session-to-session noise. `frameMs` is the display frame
  * measured while recording: frame and input times move by whole frames.
  */
@@ -36,20 +36,20 @@ export function unitOf(metric: MetricName): string {
   return " ms";
 }
 
-export function deriveBudget(worst: Metrics, frameMs: number): Metrics {
+export function deriveLimits(worst: Metrics, frameMs: number): Metrics {
   const out: Metrics = {};
   for (const name of metricNames(worst)) out[name] = deriveLimit(name, worst[name]!, frameMs);
   return out;
 }
 
-/** Each metric's lower limit of the two, so recording again can only tighten a budget. */
+/** Each metric's lower limit of the two, so recording again can only tighten them. */
 export function tighten(stored: Metrics, derived: Metrics): Metrics {
   const out: Metrics = { ...derived };
   for (const name of metricNames(stored)) out[name] = Math.min(stored[name]!, derived[name] ?? Infinity);
   return out;
 }
 
-/** The limits a budget recorded now would lower by more than `TIGHTEN_MIN_GAIN`, at their new value. */
+/** The limits that recording now would lower by more than `TIGHTEN_MIN_GAIN`, at their new value. */
 export function tighterLimits(stored: Metrics, derived: Metrics): Metrics {
   const out: Metrics = {};
   for (const name of metricNames(stored)) {
@@ -96,63 +96,60 @@ export function validateLimits(scenario: string, limits: Metrics, known: readonl
 }
 
 /**
- * Version 2 adds where each budget was recorded: `environments` names each
- * machine once, `recordedOn` points every budget at one. Version 1 files have
- * neither and still read: their budgets just have no machine to check.
+ * `environments` names each machine once, `recordedOn` points every
+ * scenario's limits at the machine they were recorded on.
  */
-interface BudgetFile {
-  version: 2;
+interface LimitsFile {
+  version: 1;
   environments: Record<string, Environment>;
-  budgets: Record<string, Metrics>;
+  limits: Record<string, Metrics>;
   recordedOn: Record<string, string>;
 }
 
-export interface StoredBudget {
-  budget: Metrics;
-  /** Where it was recorded; undefined for budgets written before this was stored. */
-  environment?: Environment;
+export interface StoredLimits {
+  limits: Metrics;
+  /** Where they were recorded. */
+  environment: Environment;
 }
 
 const sortedByKey = <T>(record: Record<string, T>): Record<string, T> =>
   Object.fromEntries(Object.keys(record).sort().map((key) => [key, record[key]]));
 
 /**
- * Budgets for one spec file, stored next to it in `__budgets__/<spec>.json` and
- * meant to be committed, like Playwright's snapshot folders.
+ * The recorded limits of one spec file, stored next to it in
+ * `__limits__/<spec>.json` and meant to be committed, like Playwright's snapshot folders.
  */
-export class BudgetStore {
+export class LimitStore {
   constructor(readonly path: string) {}
 
-  static forSpec(specFile: string): BudgetStore {
-    return new BudgetStore(join(dirname(specFile), "__budgets__", basename(specFile) + ".json"));
+  static forSpec(specFile: string): LimitStore {
+    return new LimitStore(join(dirname(specFile), "__limits__", basename(specFile) + ".json"));
   }
 
-  private read(): BudgetFile {
-    if (!existsSync(this.path)) return { version: 2, environments: {}, budgets: {}, recordedOn: {} };
-    const file = JSON.parse(readFileSync(this.path, "utf8")) as Partial<BudgetFile>;
-    return { version: 2, environments: file.environments ?? {}, budgets: file.budgets ?? {}, recordedOn: file.recordedOn ?? {} };
+  private read(): LimitsFile {
+    if (!existsSync(this.path)) return { version: 1, environments: {}, limits: {}, recordedOn: {} };
+    return JSON.parse(readFileSync(this.path, "utf8")) as LimitsFile;
   }
 
-  get(key: string): StoredBudget | undefined {
+  get(key: string): StoredLimits | undefined {
     const file = this.read();
-    const budget = file.budgets[key];
-    if (!budget) return undefined;
-    const id = file.recordedOn[key];
-    return { budget, environment: id ? file.environments[id] : undefined };
+    const limits = file.limits[key];
+    if (!limits) return undefined;
+    return { limits, environment: file.environments[file.recordedOn[key]] };
   }
 
   /** Read-modify-write, so several scenarios of one file can record in turn. */
-  set(key: string, budget: Metrics, environment: Environment): void {
+  set(key: string, limits: Metrics, environment: Environment): void {
     const file = this.read();
     const id = environmentId(environment);
-    file.budgets[key] = budget;
+    file.limits[key] = limits;
     file.recordedOn[key] = id;
     file.environments[id] = environment;
-    // Machines no budget points at any more are dropped.
+    // Machines no scenario points at any more are dropped.
     const used = new Set(Object.values(file.recordedOn));
     const environments = Object.fromEntries(Object.entries(file.environments).filter(([envId]) => used.has(envId)));
     mkdirSync(dirname(this.path), { recursive: true });
-    const out: BudgetFile = { version: 2, environments: sortedByKey(environments), budgets: sortedByKey(file.budgets), recordedOn: sortedByKey(file.recordedOn) };
+    const out: LimitsFile = { version: 1, environments: sortedByKey(environments), limits: sortedByKey(file.limits), recordedOn: sortedByKey(file.recordedOn) };
     writeFileSync(this.path, JSON.stringify(out, null, 2) + "\n");
   }
 }

@@ -1,5 +1,5 @@
 # Measures how far zerospikes can be trusted on a CI runner, with the 20k example:
-# false alarms of recorded budgets, and `zerospikes compare` on the same build and
+# false alarms of recorded limits, and `zerospikes compare` on the same build and
 # on slowed builds. Each check runs on its own runner so they don't compete for CPU.
 # Too slow for every push: run it by hand, and weekly to catch drift in runners or Chromium.
 name: reliability
@@ -18,9 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - check: budgets false alarms
+          - check: limits false alarms
             command: npm run perf:reliability -- --only clean
-            recordBudgets: true
+            recordLimits: true
           - check: compare same build
             command: npm run perf:compare-reliability -- --factors ""
           - check: compare slowed x1.1
@@ -45,8 +45,8 @@ jobs:
       - run: npm run build
         working-directory: .
       - run: npx playwright install --with-deps chromium
-      # The committed budgets were recorded on another machine: record this runner's own first.
-      - if: matrix.recordBudgets
+      # The committed limits were recorded on another machine: record this runner's own first.
+      - if: matrix.recordLimits
         run: npm run build && npx playwright test --update-snapshots=all
       - run: ${{ matrix.command }}
       - if: always()

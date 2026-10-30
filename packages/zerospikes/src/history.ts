@@ -20,10 +20,10 @@ export interface Run {
 export interface IndexedScenario {
   status: ScenarioResult["status"];
   metrics: Metrics;
-  budget: Metrics | null;
-  /** As in `ScenarioResult`: what the history view needs to tighten a budget from this run. */
+  limits: Metrics | null;
+  /** As in `ScenarioResult`: what the history view needs to tighten the limits from this run. */
   tighter?: Metrics;
-  budgetFile?: string;
+  limitsFile?: string;
 }
 
 export interface IndexedRun {
@@ -98,8 +98,8 @@ function writeAtomically(path: string, data: string | Buffer): void {
 function indexEntryOf(run: Run, file: string): IndexedRun {
   const scenarios: Record<string, IndexedScenario> = {};
   for (const result of run.results) {
-    const { status, metrics, budget, tighter, budgetFile } = result;
-    scenarios[result.key] = { status, metrics, budget, ...(tighter ? { tighter } : {}), ...(budgetFile ? { budgetFile } : {}) };
+    const { status, metrics, limits, tighter, limitsFile } = result;
+    scenarios[result.key] = { status, metrics, limits, ...(tighter ? { tighter } : {}), ...(limitsFile ? { limitsFile } : {}) };
   }
   return { date: run.date, git: run.git, file, scenarios };
 }

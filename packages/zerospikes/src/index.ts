@@ -1,6 +1,6 @@
 import { test as base, expect, type CDPSession, type Page, type TestInfo } from "@playwright/test";
 import { writeFileSync } from "node:fs";
-import { BudgetStore, check, deriveBudget, overTargets, tighten, tighterLimits, unitOf, validateLimits } from "./budgets.js";
+import { LimitStore, check, deriveLimits, overTargets, tighten, tighterLimits, unitOf, validateLimits } from "./limits.js";
 import { FALLBACK_FRAME_MS } from "./defaults.js";
 import type { AppRuntime } from "./connect.js";
 import { collectGarbage, enableCpuClock, hotFunctions, readCpuClock, sampleMemory, startProfiler, stopProfiler } from "./cdp.js";
@@ -24,8 +24,6 @@ import {
 } from "./types.js";
 
 export type * from "./types.js";
-export { SLACK, TARGETS } from "./defaults.js";
-export { deriveBudget } from "./budgets.js";
 export type { ErrorFilter } from "./page-errors.js";
 export { expect };
 
@@ -33,12 +31,15 @@ type Point = [x: number, y: number];
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
-export class ZeroSpikes {
+/** What the `zs` fixture does; its other methods are for the fixture only. */
+export type ZeroSpikes = Pick<ZeroSpikesFixture, "page" | "measure" | "cycles" | "drag" | "frame">;
+
+class ZeroSpikesFixture {
   private cdpSession: CDPSession | null = null;
   private cpuClockEnabled = false;
-  /** Scenarios over budget, thrown together when the test ends. */
+  /** Scenarios over their limits, thrown together when the test ends. */
   private readonly failures: Error[] = [];
-  private readonly store: BudgetStore;
+  private readonly store: LimitStore;
   private readonly errors: ErrorWatch;
   /**
    * What the page logged in the test's own steps before a scenario: the
@@ -57,14 +58,14 @@ export class ZeroSpikes {
     /** Errors the page may log without the scenario counting as broken. */
     ignoreErrors: readonly ErrorFilter[] = [],
   ) {
-    this.store = BudgetStore.forSpec(testInfo.file);
+    this.store = LimitStore.forSpec(testInfo.file);
     this.errors = watchErrors(page, ignoreErrors);
   }
 
   /**
    * Runs `act` (after `warmup` unmeasured runs) `runs` times while recording
    * frames and input latency, takes the median of each metric and checks it
-   * against the budget recorded for this scenario. When over budget it
+   * against the limits recorded for this scenario. When over them it
    * CPU-profiles one more run to say what the time went into and fails the
    * test once it ends, like `expect.soft`: the scenarios after it still run.
    * In Chromium every run starts after a forced GC, so garbage left by the
@@ -105,12 +106,12 @@ export class ZeroSpikes {
       }
     }
     const metrics = aggregate(perRun);
-    if (opts.budget) validateLimits(name, opts.budget, INTERACTION_METRICS, metrics);
+    if (opts.limits) validateLimits(name, opts.limits, INTERACTION_METRICS, metrics);
     // Headed frames follow the display: its rate is part of where frame times were measured.
     const environment =
       this.environment.headless || !frameGaps.length ? this.environment : { ...this.environment, displayHz: displayRateOf(median(frameGaps)) };
     const frameMs = frameGaps.length ? median(frameGaps) : FALLBACK_FRAME_MS;
-    const result = this.decide("interaction", name, metrics, worstOf(perRun), frameMs, environment, this.errorsSoFar(), opts.budget);
+    const result = this.decide("interaction", name, metrics, worstOf(perRun), frameMs, environment, this.errorsSoFar(), opts.limits);
     result.runs = perRun;
     if (cpuPerRun.length) {
       result.cpu = {
@@ -171,8 +172,8 @@ export class ZeroSpikes {
       "memory.nodes": last.domNodes - first.domNodes,
       "memory.listeners": last.listeners - first.listeners,
     };
-    if (opts.budget) validateLimits(name, opts.budget, MEMORY_METRICS, metrics);
-    const result = this.decide("memory", name, metrics, metrics, FALLBACK_FRAME_MS, this.environment, this.errorsSoFar(), opts.budget);
+    if (opts.limits) validateLimits(name, opts.limits, MEMORY_METRICS, metrics);
+    const result = this.decide("memory", name, metrics, metrics, FALLBACK_FRAME_MS, this.environment, this.errorsSoFar(), opts.limits);
     result.samples = samples;
     return this.finish(result);
   }
@@ -237,8 +238,8 @@ export class ZeroSpikes {
   }
 
   /**
-   * Compares `metrics` with the recorded budget, recording it as `-u` /
-   * `ZS_UPDATE` say. New budgets are derived from `worst`, so they already
+   * Compares `metrics` with the recorded limits, recording them as `-u` /
+   * `ZS_UPDATE` say. New limits are derived from `worst`, so they already
    * cover the run-to-run spread seen while recording.
    *
    * Recording again only tightens: each limit keeps the lower of the stored
@@ -246,11 +247,11 @@ export class ZeroSpikes {
    * got slower still fails. `ZS_ALLOW_WORSE` accepts the new numbers whatever
    * they are, for a change that is slower on purpose.
    *
-   * A budget recorded on another machine is no limit here: it isn't compared,
+   * Limits recorded on another machine aren't checked here,
    * unless `-u` records this machine's or `ZS_ANY_MACHINE` asks to compare anyway.
    *
    * A scenario whose page logged `errors` is none of this: numbers from a run
-   * that broke halfway can look faster, and would lower its budget for good.
+   * that broke halfway can look faster, and would lower its limits for good.
    */
   private decide(
     kind: ScenarioResult["kind"],
@@ -266,52 +267,52 @@ export class ZeroSpikes {
     const project = this.testInfo.project.name || "default";
     const key = `${project} › ${test} › ${name}`;
     if (errors.length) {
-      const budget = inCompareSession() ? null : (this.store.get(key)?.budget ?? null);
-      return { kind, key, test, name, project, metrics, environment, budget, status: "error", violations: [], errors, budgetFile: this.store.path };
+      const limits = inCompareSession() ? null : (this.store.get(key)?.limits ?? null);
+      return { kind, key, test, name, project, metrics, environment, limits, status: "error", violations: [], errors, limitsFile: this.store.path };
     }
     const overTarget = overTargets(metrics);
     const base = { kind, key, test, name, project, metrics, environment, ...(overTarget.length ? { overTarget } : {}) };
-    if (inCompareSession()) return { ...base, budget: null, status: "measured", violations: [] };
-    const derived = deriveBudget(worst, frameMs);
+    if (inCompareSession()) return { ...base, limits: null, status: "measured", violations: [] };
+    const derived = deriveLimits(worst, frameMs);
     const mode = process.env.ZS_UPDATE ? "all" : this.testInfo.config.updateSnapshots;
     const updating = mode === "all" || mode === "changed";
     const stored = this.store.get(key);
     const otherMachine =
       stored?.environment && !process.env.ZS_ANY_MACHINE ? environmentDifferences(stored.environment, environment) : [];
-    let budget: Metrics | null = stored?.budget ?? null;
+    let limits: Metrics | null = stored?.limits ?? null;
     let status: ScenarioResult["status"];
     let violations: Violation[] = [];
     let tighter: Metrics = {};
 
     if (!stored || (updating && otherMachine.length)) {
-      // A first budget, or this machine's own in place of another's: nothing of its own to tighten.
+      // First limits, or this machine's own in place of another's: nothing of its own to tighten.
       if (mode === "none") {
         status = "pass";
       } else {
-        budget = derived;
-        this.store.set(key, budget, environment);
+        limits = derived;
+        this.store.set(key, limits, environment);
         status = stored ? "updated" : "recorded";
       }
     } else if (otherMachine.length) {
       status = "unchecked";
     } else if (updating) {
-      const next = process.env.ZS_ALLOW_WORSE ? derived : tighten(stored.budget, derived);
-      const changed = metricNames(next).some((metric) => next[metric] !== stored.budget[metric]);
+      const next = process.env.ZS_ALLOW_WORSE ? derived : tighten(stored.limits, derived);
+      const changed = metricNames(next).some((metric) => next[metric] !== stored.limits[metric]);
       if (changed) this.store.set(key, next, environment);
-      budget = next;
-      violations = check(metrics, next, "budget");
+      limits = next;
+      violations = check(metrics, next, "recorded");
       status = violations.length ? "fail" : changed ? "updated" : "pass";
     } else {
-      violations = check(metrics, stored.budget, "budget");
-      // A metric seen for the first time (a new input phase) gets a budget without failing.
-      const added = metricNames(metrics).filter((metric: MetricName) => !(metric in stored.budget));
+      violations = check(metrics, stored.limits, "recorded");
+      // A metric seen for the first time (a new input phase) gets a limit without failing.
+      const added = metricNames(metrics).filter((metric: MetricName) => !(metric in stored.limits));
       if (added.length && mode !== "none") {
-        budget = { ...stored.budget };
-        for (const metric of added) budget[metric] = derived[metric];
-        this.store.set(key, budget, stored.environment ?? environment);
+        limits = { ...stored.limits };
+        for (const metric of added) limits[metric] = derived[metric];
+        this.store.set(key, limits, stored.environment);
       }
       status = violations.length ? "fail" : "pass";
-      if (!violations.length) tighter = tighterLimits(stored.budget, derived);
+      if (!violations.length) tighter = tighterLimits(stored.limits, derived);
     }
     if (fixed) {
       const over = check(metrics, fixed, "fixed");
@@ -320,11 +321,11 @@ export class ZeroSpikes {
     }
     return {
       ...base,
-      budget,
+      limits,
       status,
       violations,
       derived,
-      budgetFile: this.store.path,
+      limitsFile: this.store.path,
       ...(metricNames(tighter).length ? { tighter } : {}),
       ...(status === "unchecked" ? { otherMachine } : {}),
     };
@@ -343,11 +344,11 @@ export class ZeroSpikes {
     const unlisted = errors.filter((error) => !this.errorsListed.has(error));
     for (const error of this.errorsBefore.list()) this.errorsListed.add(error);
     const what = this.errorsBefore.size ? `"${name}" or before it` : `"${name}"`;
-    return formatErrors(what, unlisted, "so its numbers weren't compared with its budget", errors.length - unlisted.length);
+    return formatErrors(what, unlisted, "so its numbers weren't compared with its limits", errors.length - unlisted.length);
   }
 
-  /** Throws every over-budget or broken scenario of the test at once; called by the fixture after the test body. */
-  assertWithinBudgets(): void {
+  /** Throws every over-limit or broken scenario of the test at once; called by the fixture after the test body. */
+  assertWithinLimits(): void {
     // After the last scenario, or in a test with none: no scenario has them, so the test fails with them.
     const errorsAfter = this.errors.take();
     if (errorsAfter.length) this.failures.push(new Error(formatErrors("the test", errorsAfter)));
@@ -372,9 +373,9 @@ function formatErrors(what: string, errors: PageError[], consequence?: string, l
   return lines.join("\n");
 }
 
-/** The failure message of a scenario over budget, shown under the test in Playwright's output. */
-function formatFailure(r: ScenarioResult, budgetPath: string): string {
-  const lines = [`zerospikes: "${r.name}" is over budget`];
+/** The failure message of a scenario over its limits, shown under the test in Playwright's output. */
+function formatFailure(r: ScenarioResult, limitsPath: string): string {
+  const lines = [`zerospikes: "${r.name}" is over its limits`];
   for (const v of r.violations) {
     lines.push(`  ${v.metric.padEnd(16)} ${String(v.value).padStart(8)}${unitOf(v.metric)}  > ${v.limit}${v.source === "fixed" ? " (fixed limit)" : ""}`);
   }
@@ -388,8 +389,8 @@ function formatFailure(r: ScenarioResult, budgetPath: string): string {
   if (r.longFrameScripts?.length) lines.push("", `  long frames came from: ${r.longFrameScripts.join(", ")}`);
   if (r.samples) lines.push("", `  per cycle: ${r.samples.map((s) => `${s.heapMB} MB / ${s.domNodes} nodes`).join(" → ")}`);
   if (r.profilePath) lines.push("", `  CPU profile: ${r.profilePath}  (DevTools › Performance › Load profile)`);
-  if (r.violations.some((v) => v.source === "budget")) {
-    lines.push(`  budgets: ${budgetPath}`, "  slower on purpose? accept it with w in npx zerospikes, or ZS_ALLOW_WORSE=1 npx playwright test -u");
+  if (r.violations.some((v) => v.source === "recorded")) {
+    lines.push(`  limits: ${limitsPath}`, "  slower on purpose? accept it with w in npx zerospikes, or ZS_ALLOW_WORSE=1 npx playwright test -u");
   }
   return lines.join("\n");
 }
@@ -413,9 +414,9 @@ export const test = base.extend<ZeroSpikesOptions & { zs: ZeroSpikes; _zsRuntime
       { name: runtime?.name ?? browserName, version: browser.version() },
       runtime?.headless ?? testInfo.project.use.headless ?? true,
     );
-    const zs = new ZeroSpikes(page, testInfo, browserName === "chromium", environment, zsIgnoreErrors);
+    const zs = new ZeroSpikesFixture(page, testInfo, browserName === "chromium", environment, zsIgnoreErrors);
     await use(zs);
     await zs.detach();
-    zs.assertWithinBudgets();
+    zs.assertWithinLimits();
   },
 });

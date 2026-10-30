@@ -1,4 +1,4 @@
-// Checks how far the committed budgets can be trusted. With no mistake on, every
+// Checks how far the committed limits can be trusted. With no mistake on, every
 // failure is a false alarm. With one mistake on, the scenario it slows down must
 // fail and every other scenario must pass.
 //
@@ -51,12 +51,12 @@ function buildWithMistake(mistake) {
 }
 
 function emptyTally(test) {
-  return { test, runs: 0, failures: 0, failedMetrics: {}, budgetUse: {}, measurements: [] };
+  return { test, runs: 0, failures: 0, failedMetrics: {}, limitsUse: {}, measurements: [] };
 }
 
 /**
- * Adds one run of a scenario: whether it failed, which metrics failed, value ÷ budget
- * for each metric, and the raw measurements, so other budget rules can be tried on them later.
+ * Adds one run of a scenario: whether it failed, which metrics failed, value ÷ limit
+ * for each metric, and the raw measurements, so other limit rules can be tried on them later.
  */
 function tally(scenario, result) {
   scenario.runs++;
@@ -66,8 +66,8 @@ function tally(scenario, result) {
     scenario.failedMetrics[violation.metric] = (scenario.failedMetrics[violation.metric] ?? 0) + 1;
   }
   for (const [metric, value] of Object.entries(result.metrics)) {
-    const budget = result.budget?.[metric];
-    if (budget) (scenario.budgetUse[metric] ??= []).push(value / budget);
+    const limit = result.limits?.[metric];
+    if (limit) (scenario.limitsUse[metric] ??= []).push(value / limit);
   }
 }
 
@@ -95,10 +95,10 @@ try {
 
 const percent = (ratio) => `${Math.round(ratio * 100)}%`;
 
-/** The metric that came closest to its budget, as "metric 66% (worst 80%)". */
-function closestToBudget(budgetUse) {
-  const [metric, ratios] = Object.entries(budgetUse).sort(([, a], [, b]) => median(b) - median(a))[0] ?? [];
-  return metric ? `${metric} ${percent(median(ratios))} (worst ${percent(Math.max(...ratios))})` : "no budget";
+/** The metric that came closest to its limit, as "metric 66% (worst 80%)". */
+function closestToLimit(limitsUse) {
+  const [metric, ratios] = Object.entries(limitsUse).sort(([, a], [, b]) => median(b) - median(a))[0] ?? [];
+  return metric ? `${metric} ${percent(median(ratios))} (worst ${percent(Math.max(...ratios))})` : "no limits";
 }
 
 console.log("\n");
@@ -113,7 +113,7 @@ for (const configuration of Object.values(report.configurations)) {
     const marker = scenario.test === target ? "  ← should fail" : "";
     const failedMetrics = Object.entries(scenario.failedMetrics).map(([metric, count]) => `${metric}×${count}`).join(" ");
     console.log(`  ${scenario.failures}/${scenario.runs} failed  ${name}${marker}${failedMetrics ? `  [${failedMetrics}]` : ""}`);
-    console.log(`      closest to budget: ${closestToBudget(scenario.budgetUse)}`);
+    console.log(`      closest to limit: ${closestToLimit(scenario.limitsUse)}`);
   }
   console.log("");
 }

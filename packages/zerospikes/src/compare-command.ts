@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { compare, type ScenarioComparison } from "./compare.js";
-import { unitOf } from "./budgets.js";
+import { unitOf } from "./limits.js";
 import type { MetricName } from "./types.js";
 
 export const COMPARE_USAGE = `Usage: zerospikes compare --baseline <url> --candidate <url> [options] [-- playwright args]

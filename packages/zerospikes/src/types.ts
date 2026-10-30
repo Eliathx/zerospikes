@@ -56,9 +56,9 @@ export interface MeasureOptions {
   before?: () => Promise<void>;
   /** Time to keep recording after the action returns, so trailing work (debounces, commits) counts. Default 300. */
   settleMs?: number;
-  /** Fixed limits, checked against the medians on top of the recorded budget: `{ "frame.max": 50 }`. */
-  budget?: Partial<Record<InteractionMetric, number>>;
-  /** CPU-profile one extra run when a budget is missed (Chromium only). Default true. */
+  /** Fixed limits, checked against the medians on top of the recorded ones: `{ "frame.max": 50 }`. */
+  limits?: Partial<Record<InteractionMetric, number>>;
+  /** CPU-profile one extra run when a limit is missed (Chromium only). Default true. */
   profileOnFail?: boolean;
 }
 
@@ -67,8 +67,8 @@ export interface CyclesOptions {
   cycles?: number;
   /** Cycles before the baseline, so lazy caches are already filled. Default 1. */
   warmup?: number;
-  /** Fixed limits, as in `MeasureOptions.budget`: `{ "memory.nodes": 0 }`. */
-  budget?: Partial<Record<MemoryMetric, number>>;
+  /** Fixed limits, as in `MeasureOptions.limits`: `{ "memory.nodes": 0 }`. */
+  limits?: Partial<Record<MemoryMetric, number>>;
 }
 
 export interface MemorySample {
@@ -81,7 +81,7 @@ export interface Violation {
   metric: MetricName;
   value: number;
   limit: number;
-  source: "budget" | "fixed";
+  source: "recorded" | "fixed";
 }
 
 /** A metric over the value it should stay under to feel smooth (`TARGETS`): a warning, not a failure. */
@@ -119,13 +119,14 @@ export interface ScenarioResult {
   name: string;
   project: string;
   metrics: Metrics;
-  budget: Metrics | null;
+  /** The scenario's recorded limits, when it has any. */
+  limits: Metrics | null;
   /**
-   * `measured`: inside a `zerospikes compare` session, where budgets play no part.
-   * `unchecked`: the budget was recorded on another machine, so it wasn't compared
+   * `measured`: inside a `zerospikes compare` session, where recorded limits play no part.
+   * `unchecked`: the limits were recorded on another machine, so they weren't checked
    * (fixed limits still were).
    * `error`: the page logged errors while it ran, so it may not have done what it
-   * measures: its numbers weren't compared, recorded or offered to lower a budget.
+   * measures: its numbers weren't compared, recorded or offered to lower its limits.
    */
   status: "pass" | "fail" | "recorded" | "updated" | "measured" | "unchecked" | "error";
   violations: Violation[];
@@ -133,13 +134,13 @@ export interface ScenarioResult {
   overTarget?: TargetMiss[];
   /** Limits that recording now would lower by more than 10%, at their new value: `-u` applies them. */
   tighter?: Metrics;
-  /** The whole budget recording this run would save, for accepting a slower scenario later without running it again. */
+  /** The limits recording this run would save, for accepting a slower scenario later without running it again. */
   derived?: Metrics;
-  /** The budgets file the scenario's budget lives in. */
-  budgetFile?: string;
+  /** The file the scenario's limits live in. */
+  limitsFile?: string;
   /** Where the scenario ran. */
   environment?: Environment;
-  /** For `unchecked`: what differs from where the budget was recorded, as `field: recorded → current`. */
+  /** For `unchecked`: what differs from where the limits were recorded, as `field: recorded → current`. */
   otherMachine?: string[];
   /** Each measured run's metrics; `metrics` holds their medians. */
   runs?: Metrics[];

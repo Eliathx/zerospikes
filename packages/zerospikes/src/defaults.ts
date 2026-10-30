@@ -8,7 +8,7 @@ import type { MetricName } from "./types.js";
 /**
  * What a scenario should stay under to feel smooth, whatever it measured
  * before. Over a target is a warning, never a failure: an app that already
- * lags still gets budgets that stop it getting worse.
+ * lags still gets limits that stop it getting worse.
  *
  * - `frame.max` 50 ms: a frame that takes longer is a long animation frame
  *   (W3C Long Animation Frames API), the point where a hitch is visible.
@@ -26,7 +26,7 @@ export const TARGETS: Partial<Record<MetricName, number>> = {
 };
 
 /**
- * Room a recorded budget leaves above the worst of its runs, so another
+ * Room a recorded limit leaves above the worst of its runs, so another
  * browser session on the same machine doesn't fail it.
  *
  * Calibrated with `examples/20k-table/scripts/calibrate-slack.mjs` on 80
@@ -58,7 +58,7 @@ export const SLACK = {
    * detail panel, recorded at 9.7 ms, took 21.7 ms in another session of the
    * same day, which the 12 ms cover. Above that, ×1.45 is the smallest ratio
    * with no false alarm in any session, the busy ones included, so a time
-   * over budget with CPU time within it points at another program.
+   * over its limit with CPU time within it points at another program.
    */
   cpuRatio: 1.45,
   cpuMs: 12,
@@ -80,7 +80,7 @@ export const SLACK = {
 };
 
 /**
- * How much lower a budget recorded now would be, before suggesting `-u` to
+ * How much lower a limit recorded now would be, before suggesting `-u` to
  * tighten it: the same 10% `zerospikes compare` takes as the smallest change
  * worth failing for.
  */

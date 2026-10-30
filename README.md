@@ -1,8 +1,8 @@
 # zerospikes
 
-Interaction performance budgets for Playwright. Write a scenario and
-measure every frame while it runs, record a budget the first
-time like a snapshot, and the test will fail when a later change makes it slower.
+Interaction performance limits for Playwright, a kind of performance budget.
+Write a scenario and measure every frame while it runs, record its limits the
+first time like a snapshot, and the test will fail when a later change makes it slower.
 
 ```ts
 import { test } from "zerospikes";
@@ -21,27 +21,27 @@ test("filter as you type", async ({ page, zs }) => {
   FAIL    sort by client (3.8s)
   ...
 
-  zerospikes  6 scenarios · 1 over budget · 1 budgets recorded
+  zerospikes  6 scenarios · 1 over limits · 1 limits recorded
   FAIL    sort by client › click the header   input down/move/up/click 351 ms > 87, frame.max 346 ms > 83
 
-  Details, trends and budgets: npx zerospikes
+  Details, trends and limits: npx zerospikes
 ```
 
-The test itself fails with the same detail, the path of the budgets file and
+The test itself fails with the same detail, the path of the limits file and
 how to accept an intended change (`npx playwright test -u`).
 
 ## The zerospikes command
 
 `npx zerospikes` opens every scenario's history in the terminal: its status in
-the latest run, each metric against its budget, and its trend across past runs
+the latest run, each metric against its limit, and its trend across past runs
 and branches. Open a scenario to see where its time went (the hottest functions
 of a profiled run, the `.cpuprofile` to load in DevTools › Performance) and which targets it lags behind.
 
 | Key | What it does |
 |---|---|
 | `r` | Runs the suite; the view updates when it ends |
-| `t` | Lowers the budgets the latest run beat |
-| `w` | Saves a failed scenario's numbers as its budget, when it's slower on purpose |
+| `t` | Lowers the limits the latest run beat |
+| `w` | Saves a failed scenario's numbers as its limits, when it's slower on purpose |
 | `b` | Shows one branch's runs, or all |
 
 `r` runs `npx playwright test`, or the command your package.json names:
@@ -65,10 +65,10 @@ Without a terminal, or with `--print`, it prints the scenario list once.
 | `input.click` / `input.key` / `input.wheel` | Same for clicks, key presses and wheel steps |
 | `memory.heapMB` / `memory.nodes` / `memory.listeners` | For `zs.cycles`: what stays behind after N cycles, with GC forced before every sample. Chromium only |
 
-## Budgets
+## Limits
 
 1. Run `npx playwright test`. The first time, each scenario saves how fast it
-   is to `__budgets__/<spec>.json`. Commit that file.
+   is to `__limits__/<spec>.json`. Commit that file.
 2. From then on, a scenario fails if it gets slower than what was saved. In
    your CI pipeline, run `npx playwright test --update-snapshots=none` so it
    only checks and never saves.
@@ -76,16 +76,16 @@ Without a terminal, or with `--print`, it prints the scenario list once.
    run `npx playwright test -u`) to save the new numbers, and commit them.
 4. If you made it faster, press `t` in `npx zerospikes` (or run
    `npx playwright test --update-snapshots=all`) so the faster numbers become
-   the new limit.
+   the new limits.
 
-You can also set a fixed limit yourself: `{ budget: { "frame.max": 50 } }`.
+You can also set fixed limits yourself: `{ limits: { "frame.max": 50 } }`.
 
 ## Errors in the page
 
 A scenario that throws halfway can look faster than one that works. If the
 page logs a `console.error` or an uncaught exception while a scenario runs, it
 shows as `ERROR` instead of `PASS` or `FAIL`. Its numbers aren't compared with
-its budget and can't set or lower one; its history shows them greyed out. The
+its limits and can't set or lower them; its history shows them greyed out. The
 test fails and lists the errors: fix
 them and run again. An error in the test's own steps counts against the
 scenarios after it, which start from what those steps left; one after the last
@@ -108,8 +108,8 @@ export default defineConfig<ZeroSpikesOptions>({
 ## API
 
 ```ts
-zs.measure(name, act, { runs, warmup, before, settleMs, budget, profileOnFail })
-zs.cycles(name, cycle, { cycles, warmup, budget })   // memory
+zs.measure(name, act, { runs, warmup, before, settleMs, limits, profileOnFail })
+zs.cycles(name, cycle, { cycles, warmup, limits })   // memory
 zs.drag([x, y], [x2, y2], { steps })                 // one pointermove per frame
 zs.frame()                                           // wait for the next frame
 ```
@@ -160,7 +160,7 @@ export default defineConfig<ZeroSpikesAppOptions>({
   (WebKitGTK) have no CDP: measure the frontend in a browser there.
 - **Electron**: start it with `--remote-debugging-port=9222`.
 
-Budgets recorded this way say `webview2` or `electron` where a browser run says
+Limits recorded this way say `webview2` or `electron` where a browser run says
 `chromium`, so they are never compared with a browser's.
 
 ## Example
@@ -175,7 +175,7 @@ npx playwright install chromium
 npm run example:perf
 ```
 
-The first run records the budgets and passes. Set `sort: true` in
+The first run records the limits and passes. Set `sort: true` in
 `examples/20k-table/src/mistakes.ts`, run it again, and the sort scenario fails.
 `npx zerospikes` in `examples/20k-table` opens it, with the profile pointing at
 `sortRows`, and `r` there runs the suite again. `npm run example` opens the app with a
@@ -188,7 +188,7 @@ live meter, to feel the mistakes by hand.
 | `resize` | Re-measures every cell each time a column drag starts | `input.down` only (~7x) |
 | `leak` | The detail panel leaves its listener and DOM behind when it closes | `memory.nodes`, `memory.listeners` |
 
-Budgets belong to the machine that recorded them: on another machine, record
+Limits belong to the machine that recorded them: on another machine, record
 your own with `npm run perf:update` in the example's folder.
 
 ## Development

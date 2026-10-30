@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import { unitOf } from "./budgets.js";
+import { unitOf } from "./limits.js";
 import { TARGETS } from "./defaults.js";
 import type { IndexedRun, IndexedScenario } from "./history.js";
 import { metricNames } from "./stats.js";
@@ -20,7 +20,7 @@ const SELECTED = hasColor ? INDENT : "  > ";
 const MIN_FIRST_COLUMN_WIDTH = 10;
 /** The fewest runs a narrow terminal shows a trend over, before the scenario names give way instead. */
 const MIN_TREND_RUNS = 10;
-/** Statuses whose run was checked against its budget, so counting the metrics within it means something. */
+/** Statuses whose run was checked against its limits, so counting the metrics within it means something. */
 const CHECKED: IndexedScenario["status"][] = ["pass", "fail", "updated"];
 /** `Oct 28, 10:27`, the dates in DATE_FORMAT. */
 const DATE_WIDTH = 13;
@@ -66,13 +66,13 @@ const withUnit = (value: number | undefined, metric: MetricName) => (value === u
 
 /**
  * The colour of one run in a trend, as the rest of the view uses them: red
- * over the budget it was checked against (it failed on this metric), yellow
+ * over the limit it was checked against (it failed on this metric), yellow
  * within it but over the metric's target (it passes, and lags), green within
- * both. Dim for a run that wasn't checked against a budget.
+ * both. Dim for a run that wasn't checked against limits.
  */
 function paintOf(scenario: IndexedScenario, metric: MetricName): Paint {
   const value = scenario.metrics[metric]!;
-  const limit = scenario.budget?.[metric];
+  const limit = scenario.limits?.[metric];
   const target = TARGETS[metric];
   if (limit === undefined || !CHECKED.includes(scenario.status)) return dim;
   if (value > limit) return red;
@@ -126,22 +126,22 @@ function table(rows: string[][], widths: number[], width: number, alignRight: bo
   );
 }
 
-/** Marks a scenario, or a metric, whose budget can be lowered. */
+/** Marks a scenario, or a metric, whose limits can be lowered. */
 const LOWER_MARK = "↓";
 /** Past this, the scenario list only pushes its status away from the names. */
 const LIST_MAX_WIDTH = 100;
 
 /**
  * A scenario's metrics in its latest run, as a tree under its row: each value
- * coloured as in its trend, against `budget` (the budget now, or that run's),
+ * coloured as in its trend, against `limitsNow` (the limits now, or that run's),
  * and `LOWER_MARK` on the ones in `lowerable`.
  */
-function metricTree(history: ScenarioHistory, budget: Metrics | null | undefined, lowerable: Metrics): string[] {
+function metricTree(history: ScenarioHistory, limitsNow: Metrics | null | undefined, lowerable: Metrics): string[] {
   const latest = history.entries.at(-1)!.scenario;
   const metrics = Object.keys(latest.metrics) as MetricName[];
-  // The unit once, after the budget: `0.2 / 3 MB`, with every column lined up across the tree.
+  // The unit once, after the limit: `0.2 / 3 MB`, with every column lined up across the tree.
   const values = metrics.map((metric) => shownValue(latest, metric, false));
-  const limits = metrics.map((metric) => (budget?.[metric] === undefined ? "—" : formatNumber(budget[metric]!)));
+  const limits = metrics.map((metric) => (limitsNow?.[metric] === undefined ? "—" : formatNumber(limitsNow[metric]!)));
   const units = metrics.map((metric) => unitOf(metric).trim());
   const widest = (cells: string[]) => Math.max(...cells.map((cell) => visibleWidth(cell)));
   return metrics.map((metric, i) => {
@@ -154,9 +154,9 @@ function metricTree(history: ScenarioHistory, budget: Metrics | null | undefined
 
 /**
  * Each scenario with its latest status and how many metrics stayed within
- * budget. Scenarios with metrics in `lowerable` (by key) get `LOWER_MARK`
+ * their limits. Scenarios with metrics in `lowerable` (by key) get `LOWER_MARK`
  * after their status; the ones in `expanded` show their metrics in a tree
- * under them, against `budgets` (the budgets now, by key). A scenario the
+ * under them, against `limitsNow` (the limits now, by key). A scenario the
  * latest run didn't measure is greyed, with when it last ran in place of a
  * status that is no longer news.
  */
@@ -165,7 +165,7 @@ export function scenarioList(
   selected: number,
   width: number,
   lowerable = new Map<string, Metrics>(),
-  budgets = new Map<string, Metrics | undefined>(),
+  limitsNow = new Map<string, Metrics | undefined>(),
   expanded = new Set<string>(),
 ): string[] {
   const labels = labelsOf(histories);
@@ -187,30 +187,30 @@ export function scenarioList(
       const shown = stale[i] ? dim(line) : line;
       const row = i === selected ? highlight(SELECTED + shown) : INDENT + shown;
       if (!expanded.has(history.key)) return [row];
-      return [row, ...metricTree(history, budgets.get(history.key) ?? history.entries.at(-1)!.scenario.budget, lowerable.get(history.key) ?? {})];
+      return [row, ...metricTree(history, limitsNow.get(history.key) ?? history.entries.at(-1)!.scenario.limits, lowerable.get(history.key) ?? {})];
     }),
   ];
 }
 
 /**
  * A scenario's status in a run and how many of its metrics stayed within their
- * budget, as `FAIL 5/6`: the count green when all did, red otherwise, so a
+ * limits, as `FAIL 5/6`: the count green when all did, red otherwise, so a
  * failure says how far it went. Just the status for a run that wasn't checked
- * against a budget (`NEW`, `SKIP`).
+ * against limits (`NEW`, `SKIP`).
  */
 function statusOf(scenario: IndexedScenario): string {
   const word = STATUS_WORD[scenario.status];
-  const budget = scenario.budget;
-  if (!budget || !CHECKED.includes(scenario.status)) return word;
-  const checked = (Object.keys(budget) as MetricName[]).filter((metric) => scenario.metrics[metric] !== undefined);
-  const within = checked.filter((metric) => scenario.metrics[metric]! <= budget[metric]!).length;
+  const { limits } = scenario;
+  if (!limits || !CHECKED.includes(scenario.status)) return word;
+  const checked = (Object.keys(limits) as MetricName[]).filter((metric) => scenario.metrics[metric] !== undefined);
+  const within = checked.filter((metric) => scenario.metrics[metric]! <= limits[metric]!).length;
   const count = `${within}/${checked.length}`;
   return `${word} ${within === checked.length ? green(count) : red(count)}`;
 }
 
-/** A metric's name, last value and budget now: the metrics pane's columns. */
+/** A metric's name, last value and limit now: the metrics pane's columns. */
 const METRIC_COLUMNS = [16, 9, 9];
-/** After the budget: ` ↓ `, the mark one space from it and one from the pane's edge. */
+/** After the limit: ` ↓ `, the mark one space from it and one from the pane's edge. */
 const MARK_ROOM = 3;
 /** The metrics pane's width: its columns, the gaps between them, the indent before and the mark after. */
 export const METRICS_PANE_WIDTH = INDENT.length + METRIC_COLUMNS.reduce((total, w) => total + w, 0) + COLUMN_GAP.length * (METRIC_COLUMNS.length - 1) + MARK_ROOM;
@@ -229,22 +229,22 @@ function selectedLine(line: string, width: number, focused: boolean): string {
 
 /**
  * The left pane of a scenario: each metric with its latest value, coloured as
- * in its trend, its budget now and `LOWER_MARK` when it can be lowered.
- * `budget` is the budget now, when it changed since the latest run; by
+ * in its trend, its limit now and `LOWER_MARK` when it can be lowered.
+ * `limits` are the limits now, when they changed since the latest run; by
  * default, that run's.
  */
 export function metricsPane(
   history: ScenarioHistory,
   selectedMetric: number,
   focused: boolean,
-  budget?: Metrics | null,
+  limits?: Metrics | null,
   lowerable: Metrics = {},
 ): string[] {
   const latest = history.entries.at(-1)!.scenario;
-  const budgetNow = budget ?? latest.budget;
+  const limitsNow = limits ?? latest.limits;
   const metrics = Object.keys(latest.metrics) as MetricName[];
-  const rows = metrics.map((m) => [m, shownValue(latest, m), withUnit(budgetNow?.[m], m)]);
-  const [head, ...cells] = table([["Metric", "Last", "Budget"], ...rows], METRIC_COLUMNS, METRICS_PANE_WIDTH - MARK_ROOM, [false, true, true]);
+  const rows = metrics.map((m) => [m, shownValue(latest, m), withUnit(limitsNow?.[m], m)]);
+  const [head, ...cells] = table([["Metric", "Last", "Limit"], ...rows], METRIC_COLUMNS, METRICS_PANE_WIDTH - MARK_ROOM, [false, true, true]);
   const lines = cells.map((line, i) => (lowerable[metrics[i]] !== undefined ? `${line} ${cyan(LOWER_MARK)}` : line));
   const selected = Math.min(selectedMetric, metrics.length - 1);
   return [
@@ -256,7 +256,7 @@ export function metricsPane(
 /**
  * The right pane of a scenario: every run of one metric, newest first, under
  * its trend across them. Each row has the value, coloured as in the trend, and
- * the budget that run was checked against. A narrow pane cuts the branch name
+ * the limit that run was checked against. A narrow pane cuts the branch name
  * short, the one column of any length.
  */
 export function runsPane(history: ScenarioHistory, metric: MetricName, selectedRun: number, focused: boolean, width: number): string[] {
@@ -269,9 +269,9 @@ export function runsPane(history: ScenarioHistory, metric: MetricName, selectedR
     shortCommit(run),
     run.git?.branch ?? "—",
     shownValue(scenario, metric),
-    withUnit(scenario.budget?.[metric], metric),
+    withUnit(scenario.limits?.[metric], metric),
   ]);
-  const head = ["Date", "Commit", "Branch", metric, "Budget then"];
+  const head = ["Date", "Commit", "Branch", metric, "Limit then"];
   // The metric's name heads its column: as wide as the longest, `memory.listeners`.
   const lines = table([head, ...rows], [DATE_WIDTH, 9, 0, Math.max(13, metric.length), 11], width, [false, false, false, true, true], BRANCH_COLUMN, MIN_BRANCH_WIDTH);
   return [
@@ -283,7 +283,7 @@ export function runsPane(history: ScenarioHistory, metric: MetricName, selectedR
 }
 
 /**
- * How a run went, in one line: how many scenarios, how many over budget, and
+ * How a run went, in one line: how many scenarios, how many over their limits, and
  * whatever else needs a look. Both the reporter and the view say it this way;
  * the view says what can be lowered on its own line, with the key for it, so
  * it leaves that out with `withLowerable` false.
@@ -292,26 +292,26 @@ export const runSummary = (scenarios: Pick<IndexedScenario, "status" | "tighter"
   summaryParts(scenarios, overTarget, withLowerable).join(dim(" · "));
 
 /**
- * `runSummary`'s parts, the second always the verdict: over budget, with
- * errors, or all within budget, which a run with errors can't claim.
+ * `runSummary`'s parts, the second always the verdict: over limits, with
+ * errors, or all within limits, which a run with errors can't claim.
  */
 export function summaryParts(scenarios: Pick<IndexedScenario, "status" | "tighter">[], overTarget = 0, withLowerable = true): string[] {
   const count = (status: IndexedScenario["status"]) => scenarios.filter((scenario) => scenario.status === status).length;
   const lowerable = scenarios.filter((scenario) => scenario.tighter && metricNames(scenario.tighter).length).length;
   const parts = [`${scenarios.length} ${scenarios.length === 1 ? "scenario" : "scenarios"}`];
   const withErrors = red(`${count("error")} with errors`);
-  parts.push(count("fail") ? red(`${count("fail")} over budget`) : count("error") ? withErrors : green("all within budget"));
+  parts.push(count("fail") ? red(`${count("fail")} over limits`) : count("error") ? withErrors : green("all within limits"));
   if (count("fail") && count("error")) parts.push(withErrors);
   // Grey like their statuses: yellow is kept for lag.
-  if (count("recorded")) parts.push(dim(`${count("recorded")} budgets recorded`));
-  if (count("updated")) parts.push(dim(`${count("updated")} budgets updated`));
-  if (count("unchecked")) parts.push(dim(`${count("unchecked")} not compared (budgets from another machine)`));
+  if (count("recorded")) parts.push(dim(`${count("recorded")} limits recorded`));
+  if (count("updated")) parts.push(dim(`${count("updated")} limits updated`));
+  if (count("unchecked")) parts.push(dim(`${count("unchecked")} not checked (limits from another machine)`));
   if (overTarget) parts.push(yellow(`${overTarget} over target`));
   if (lowerable && withLowerable) parts.push(cyan(`${lowerable} can be lowered`));
   return parts;
 }
 
-/** Most over-budget metrics a failure line names: the rest are in the scenario's own view. */
+/** Most over-limit metrics a failure line names: the rest are in the scenario's own view. */
 const SHOWN_VIOLATIONS = 3;
 /** Past this, a failed scenario's name is cut short so its misses stay on the line. */
 const MAX_FAILURE_NAME_WIDTH = 48;
@@ -350,7 +350,7 @@ export function missesOf(r: ScenarioResult): string {
   return `${first.count > 1 ? `${first.count}× ` : ""}${first.message}${others.length ? `  +${others.length} more` : ""}`;
 }
 
-/** Scenarios that went wrong: over budget, or broken by errors. */
+/** Scenarios that went wrong: over limits, or broken by errors. */
 export const isFailure = (r: Pick<ScenarioResult, "status">) => r.status === "fail" || r.status === "error";
 
 /** `ERROR`, the wider of the two words a failure line starts with: the names after them line up. */
@@ -379,7 +379,7 @@ const LOCATION_SEPARATOR = " @ ";
 /**
  * What the latest run of an open scenario found beyond its numbers, each
  * under a label that says what it is, cut to `width`: limits it missed that
- * the budget column doesn't show, targets it lags behind, why it wasn't
+ * the limit column doesn't show, targets it lags behind, why it wasn't
  * compared, and, for a failure, the functions it spent its time in. A
  * scenario whose page logged errors shows them alone: nothing else it measured holds.
  */
@@ -393,9 +393,9 @@ export function scenarioDetails(result: ScenarioResult, width: number): string[]
   if (fixed.length) lines.push(labelled("Over its fixed limit", red, formatMisses(fixed)));
   if (result.overTarget?.length) {
     const misses = result.overTarget.map(({ metric, value, target }) => ({ metric, value, limit: target }));
-    lines.push(labelled("Over target", yellow, formatMisses(misses)), dim("  A warning only: the budget decides pass or fail."));
+    lines.push(labelled("Over target", yellow, formatMisses(misses)), dim("  A warning only: the limits decide pass or fail."));
   }
-  if (result.otherMachine?.length) lines.push(labelled("Not compared", dim, `its budget is from another machine (${result.otherMachine.join(", ")})`));
+  if (result.otherMachine?.length) lines.push(labelled("Not checked", dim, `its limits are from another machine (${result.otherMachine.join(", ")})`));
   if (result.samples?.length) lines.push(labelled("Per cycle", dim, result.samples.map((sample) => `${sample.domNodes} nodes`).join(" → ")));
   if (result.hot?.length) {
     const hot = result.hot.slice(0, SHOWN_HOT_FUNCTIONS).map((h) => ({ ms: `${formatNumber(h.selfMs)} ms`, ...splitLocation(h.fn) }));
@@ -417,7 +417,7 @@ export function scenarioDetails(result: ScenarioResult, width: number): string[]
 /** The errors a broken scenario's page logged, each with how many times and where. */
 function errorDetails(errors: PageError[], width: number): string[] {
   const label = "Errors in the page:";
-  const lines = ["", `  ${red(label)} ${truncate("its numbers weren't compared with its budget. Fix them and run again.", Math.max(10, width - label.length - 4))}`];
+  const lines = ["", `  ${red(label)} ${truncate("its numbers weren't compared with its limits. Fix them and run again.", Math.max(10, width - label.length - 4))}`];
   const shown = errors.slice(0, SHOWN_ERRORS);
   const countWidth = Math.max(...shown.map((e) => `${e.count}×`.length));
   for (const e of shown) {

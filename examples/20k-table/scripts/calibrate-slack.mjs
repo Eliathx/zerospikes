@@ -1,6 +1,6 @@
-// Checks the slack zerospikes leaves when it records a budget (SLACK in the
+// Checks the slack zerospikes leaves when it records limits (SLACK in the
 // library's src/defaults.ts) against sessions of the clean build: every
-// session in turn records the budgets, and each other session is a check
+// session in turn records the limits, and each other session is a check
 // that must pass. Prints the false alarms with the shipped values, and the
 // smallest values that would give none.
 //
@@ -13,7 +13,9 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SLACK, deriveBudget } from "zerospikes";
+// Not part of the package's API: SLACK and deriveLimits come straight from its build.
+import { SLACK } from "../../../packages/zerospikes/dist/defaults.js";
+import { deriveLimits } from "../../../packages/zerospikes/dist/limits.js";
 import { exampleDir } from "./suite.mjs";
 
 const RATIO_STEP = 0.05;
@@ -62,13 +64,13 @@ function falseAlarms(family) {
   for (const { scenarios } of datasets) {
     for (const sessions of scenarios) {
       sessions.forEach((recording, i) => {
-        const budget = deriveBudget(worstOfSession(recording), frameOf(recording));
+        const limits = deriveLimits(worstOfSession(recording), frameOf(recording));
         sessions.forEach((other, j) => {
           if (i === j) return;
           for (const [metric, value] of Object.entries(other.metrics)) {
-            if (!FAMILY[family](metric) || budget[metric] === undefined) continue;
+            if (!FAMILY[family](metric) || limits[metric] === undefined) continue;
             checks++;
-            if (value > budget[metric]) {
+            if (value > limits[metric]) {
               failed++;
               byMetric[metric] = (byMetric[metric] ?? 0) + 1;
             }

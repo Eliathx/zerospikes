@@ -62,5 +62,5 @@ function combine(runs: Metrics[], pick: (values: number[]) => number): Metrics {
 /** Median of every metric across runs: one GC pause in one run doesn't decide the verdict. */
 export const aggregate = (runs: Metrics[]) => combine(runs, median);
 
-/** Worst value of every metric across runs: budgets start from it, so they cover the spread seen while recording. */
+/** Worst value of every metric across runs: limits start from it, so they cover the spread seen while recording. */
 export const worstOf = (runs: Metrics[]) => combine(runs, (values) => Math.max(...values));

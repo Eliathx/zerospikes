@@ -1,7 +1,7 @@
 {
   "name": "zerospikes",
   "version": "0.1.0",
-  "description": "Interaction performance budgets for Playwright: frame times, input latency per gesture phase and memory cycles, with budgets recorded like snapshots.",
+  "description": "Interaction performance limits for Playwright: frame times, input latency per gesture phase and memory cycles, with limits recorded like snapshots, as performance budgets.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,10 +27,6 @@
     "./reporter": {
       "types": "./dist/reporter.d.ts",
       "default": "./dist/reporter.js"
-    },
-    "./history": {
-      "types": "./dist/history.d.ts",
-      "default": "./dist/history.js"
     }
   },
   "files": [
@@ -47,6 +43,7 @@
     "performance",
     "playwright",
     "jank",
+    "performance-budget",
     "frame-budget",
     "ci",
     "interaction"

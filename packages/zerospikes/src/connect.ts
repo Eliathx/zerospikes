@@ -56,7 +56,7 @@ async function appWindow(context: BrowserContext): Promise<Page> {
 
 /** What the connected page runs in, read from inside it. */
 export interface AppRuntime {
-  /** `webview2`, `electron` or `chromium`, the name budgets are recorded under. */
+  /** `webview2`, `electron` or `chromium`, the name limits are recorded under. */
   name: string;
   headless: boolean;
 }

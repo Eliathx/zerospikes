@@ -1,10 +1,10 @@
 import { cpus } from "node:os";
 
 /**
- * Where a budget was recorded. Times depend on the hardware, not just the
+ * Where limits were recorded. Times depend on the hardware, not just the
  * platform: two Linux machines can be twice as fast as each other, and CI
- * runners change CPU from one run to the next. A budget recorded on one of
- * these is no limit for another.
+ * runners change CPU from one run to the next. Limits recorded on one of
+ * these don't hold for another.
  */
 export interface Environment {
   cpu: string;
@@ -50,7 +50,7 @@ export function environmentDifferences(recorded: Environment, current: Environme
   return out;
 }
 
-/** A short stable id for an environment, to name it once in a budgets file. */
+/** A short stable id for an environment, to name it once in a limits file. */
 export function environmentId(env: Environment): string {
   const text = JSON.stringify([env.cpu, env.cores, env.platform, env.browser, env.headless, env.displayHz ?? null]);
   let hash = 0x811c9dc5;

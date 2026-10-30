@@ -2,7 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, unwatchFile, watchFile } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { acceptSlower, applyTighter, currentBudget, forgetBudgets, pendingTighter } from "./budget-actions.js";
+import { acceptSlower, applyTighter, currentLimits, forgetLimits, pendingTighter } from "./limit-actions.js";
 import { readIndex, readRun, type IndexedRun, type Run } from "./history.js";
 import {
   branchesOf,
@@ -28,8 +28,8 @@ export const HISTORY_USAGE = `Usage: zerospikes [options]
 
 Shows how each scenario did across past runs. In a terminal it's interactive:
 it runs the suite (r) and updates when a run finishes, wherever it was started.
-From the latest run it can lower the budgets a scenario beat (t), or save a
-scenario that failed as its new budget when it is slower on purpose (w).
+From the latest run it can lower the limits a scenario beat (t), or save a
+scenario that failed as its new limits when it is slower on purpose (w).
 Otherwise (or with --print) it prints the scenario list once.
 
   --run <command>    What r runs. Default: "zerospikes": { "run": "…" } in
@@ -97,7 +97,7 @@ export interface State {
   selectedRun?: number;
   /** Which pane of the open scenario ↑↓ move in: its metrics (the default) or the selected metric's runs. */
   focus?: "metrics" | "runs";
-  /** Set by `w`: the scenario waiting for y / n before its slower numbers become the budget. */
+  /** Set by `w`: the scenario waiting for y / n before its slower numbers become its limits. */
   confirming?: string;
   /** The outcome of the last action, shown above the keys until the next key. */
   message?: string;
@@ -170,7 +170,7 @@ function runningLine(running: RunningSuite, width: number): string {
   return running.last && room > 10 ? `${status}  ${dim(truncate(running.last, room))}` : status;
 }
 
-/** Scenarios whose latest run beat their budget by enough to lower it, not lowered yet. */
+/** Scenarios whose latest run beat their limits by enough to lower them, not lowered yet. */
 const tightenable = (histories: ScenarioHistory[]) =>
   histories.filter((history) => metricNames(pendingTighter(history.key, latestOf(history).scenario)).length);
 
@@ -180,11 +180,11 @@ function actionLines(history: ScenarioHistory): string[] {
   const pending = pendingTighter(history.key, scenario);
   const lines: string[] = [];
   if (metricNames(pending).length) {
-    const limits = metricNames(pending).map((metric) => `${metric} ${scenario.budget?.[metric] ?? "?"} → ${pending[metric]}`);
-    lines.push(`  ${cyan(LOWER_MARK)} ${cyan("Faster than its budget:")} ${limits.join(", ")}  ${bold("t")} ${dim("lower")}`);
+    const limits = metricNames(pending).map((metric) => `${metric} ${scenario.limits?.[metric] ?? "?"} → ${pending[metric]}`);
+    lines.push(`  ${cyan(LOWER_MARK)} ${cyan("Faster than its limits:")} ${limits.join(", ")}  ${bold("t")} ${dim("lower")}`);
   }
   if (scenario.status === "fail") {
-    lines.push(`  ${red("Slower than its budget.")} ${dim("On purpose?")} ${bold("w")} ${dim("save the last run as its budget")}`);
+    lines.push(`  ${red("Slower than its limits.")} ${dim("On purpose?")} ${bold("w")} ${dim("save the last run as its limits")}`);
   }
   return lines.length ? ["", ...lines] : [];
 }
@@ -200,7 +200,7 @@ const SHOWN_FAILURES = 3;
 /**
  * Under the list, the latest run on view in a box titled with when it ran:
  * its verdict first, then each scenario that failed with what it went over,
- * and how many budgets it beat, with the key that lowers them. It stays until
+ * and how many scenarios beat their limits, with the key that lowers them. It stays until
  * the next run, whoever ran it.
  */
 function lastRunBox(state: State, runs: IndexedRun[], lowerable: number, width: number): string[] {
@@ -220,8 +220,8 @@ function lastRunBox(state: State, runs: IndexedRun[], lowerable: number, width: 
   }
   if (failed.length > SHOWN_FAILURES) lines.push("", dim(`+${failed.length - SHOWN_FAILURES} more failed, marked in the list`));
   if (lowerable) {
-    const budgets = lowerable === 1 ? "1 faster than its budget" : `${lowerable} faster than their budgets`;
-    lines.push("", `${cyan(`${LOWER_MARK} ${budgets}`)}   ${bold("t")} ${dim("lower")}`);
+    const faster = lowerable === 1 ? "1 faster than its limits" : `${lowerable} faster than their limits`;
+    lines.push("", `${cyan(`${LOWER_MARK} ${faster}`)}   ${bold("t")} ${dim("lower")}`);
   }
   const [, ...box] = boxed(lines.map((line) => ` ${line}`), boxWidth);
   const title = `${dim("┌─")} ${bold("Last run")} ${dim(relativeTime(latest.date))} `;
@@ -245,7 +245,7 @@ export function screen(state: State, width: number, height: number): string {
       : `↑↓ select · space metrics · enter open · r run · ${branch} · q quit`;
   const status = state.running ? [runningLine(state.running, width)] : state.message ? [`  ${state.message}`] : [];
   const footer = state.confirming
-    ? [yellow(`  Save the last run's numbers as the budget of "${state.confirming}"?`), dim("  y yes · any other key no")]
+    ? [yellow(`  Save the last run's numbers as the limits of "${state.confirming}"?`), dim("  y yes · any other key no")]
     : [...status, dim(`  ${keys}`)];
   const body = open
     ? scenarioPanes(state, open, width, height - footer.length - 1)
@@ -256,7 +256,7 @@ export function screen(state: State, width: number, height: number): string {
             state.running ? -1 : state.selected,
             width,
             new Map(lowerable.map((h) => [h.key, pendingTighter(h.key, latestOf(h).scenario)])),
-            new Map(histories.map((h) => [h.key, currentBudget(h.key, latestOf(h).scenario)])),
+            new Map(histories.map((h) => [h.key, currentLimits(h.key, latestOf(h).scenario)])),
             state.expanded,
           ),
           1,
@@ -281,7 +281,7 @@ function scenarioPanes(state: State, history: ScenarioHistory, width: number, he
   const result = latestResult(state, history);
   const actions = [...(result ? scenarioDetails(result, width) : []), ...actionLines(history)];
   const title = [scenarioTitle(history), ""];
-  const left = metricsPane(history, state.selectedMetric, !onRuns, currentBudget(history.key, scenario), pendingTighter(history.key, scenario));
+  const left = metricsPane(history, state.selectedMetric, !onRuns, currentLimits(history.key, scenario), pendingTighter(history.key, scenario));
   const sideBySide = width >= SIDE_BY_SIDE_MIN_WIDTH;
   // One column short of the edge: a line that fills the terminal wraps in some of them.
   const runsWidth = (sideBySide ? width - METRICS_PANE_WIDTH - BOX_GAP.length : width) - BOX_MARGIN.length - 1;
@@ -302,7 +302,7 @@ export function onKey(state: State, key: string): "quit" | "run" | void {
   const open = histories.find((history) => history.key === state.openKey);
   if (state.confirming) {
     const history = histories.find((h) => h.key === state.confirming);
-    state.message = key === "y" && history ? acceptSlower(state.dir, latestOf(history).run, history.key) : "Kept the budget as it was.";
+    state.message = key === "y" && history ? acceptSlower(state.dir, latestOf(history).run, history.key) : "Kept the limits as they were.";
     state.confirming = undefined;
     return;
   }
@@ -346,7 +346,7 @@ export function onKey(state: State, key: string): "quit" | "run" | void {
     if (outcomes.length <= 1) state.message = outcomes[0]?.message ?? "Nothing to lower.";
     else {
       const count = lowered === outcomes.length ? `${lowered}` : `${lowered} of ${outcomes.length}`;
-      state.message = [cyan(`Lowered the budgets of ${count} scenarios.`), outcomes.find((o) => !o.done)?.message].filter(Boolean).join(" ");
+      state.message = [cyan(`Lowered the limits of ${count} scenarios.`), outcomes.find((o) => !o.done)?.message].filter(Boolean).join(" ");
     }
   } else if (key === "w" && open) {
     const { status } = latestOf(open).scenario;
@@ -399,7 +399,7 @@ export function startRun(state: State, command: string, draw: () => void): Child
   child.on("close", (code) => {
     state.running = undefined;
     state.runs = readIndex(state.dir).runs;
-    forgetBudgets();
+    forgetLimits();
     // A run that saved shows under the list as the last run; one that didn't says why.
     if (state.runs.at(-1)?.date === before) {
       const why = [...output].reverse().find((line) => /error/i.test(line)) ?? output.at(-1) ?? "no output";
@@ -420,7 +420,7 @@ function interactive(dir: string, state: State, command: string): void {
   const indexPath = join(dir, "index.json");
   const reload = () => {
     state.runs = readIndex(dir).runs;
-    forgetBudgets();
+    forgetLimits();
     draw();
   };
   let run: ChildProcess | undefined;

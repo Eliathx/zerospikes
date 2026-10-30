@@ -18,7 +18,7 @@ const showCursor = () => process.stdout.write("\x1b[?25h");
 
 /**
  * A line per test as it ends and a short summary at the end: the details,
- * trends and budget actions are in `npx zerospikes`, from the history this
+ * trends and limit actions are in `npx zerospikes`, from the history this
  * saves.
  */
 export default class ZeroSpikesReporter implements Reporter {
@@ -102,7 +102,7 @@ export default class ZeroSpikesReporter implements Reporter {
     if (!this.results.length) return;
     const overTarget = this.results.filter((r) => r.overTarget?.length).length;
     const lines = ["", `  ${bold("zerospikes")}  ${runSummary(this.results, overTarget)}`, ...failureLines(this.results, "  ")];
-    lines.push("", dim("  Details, trends and budgets: npx zerospikes"), "");
+    lines.push("", dim("  Details, trends and limits: npx zerospikes"), "");
 
     const dir = resolve(this.rootDir, this.options.outputDir ?? "zerospikes-results");
     mkdirSync(dir, { recursive: true });

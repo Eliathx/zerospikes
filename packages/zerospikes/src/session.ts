@@ -6,5 +6,5 @@ export const SESSION_ENV = {
   baseURL: "ZEROSPIKES_BASE_URL",
 } as const;
 
-/** Inside a compare session scenarios are only measured: budgets are neither checked nor recorded. */
+/** Inside a compare session scenarios are only measured: limits are neither checked nor recorded. */
 export const inCompareSession = () => Boolean(process.env[SESSION_ENV.resultsFile]);
