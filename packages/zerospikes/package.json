@@ -1,7 +1,7 @@
 {
   "name": "zerospikes",
   "version": "0.1.0",
-  "description": "Interaction performance limits for Playwright: frame times, input latency per gesture phase and memory cycles, with limits recorded like snapshots, as performance budgets.",
+  "description": "Performance limits for Playwright: frame times, input latency and memory, recorded like snapshots.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -31,13 +31,14 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "npm run build && node --test \"test/**/*.test.mjs\"",
-    "prepack": "npm run build && node -e \"for (const f of ['README.md', 'LICENSE']) require('fs').copyFileSync('../../' + f, f)\""
+    "prepack": "npm run build && node -e \"for (const f of ['README.md', 'LICENSE', 'CHANGELOG.md']) require('fs').copyFileSync('../../' + f, f)\""
   },
   "keywords": [
     "performance",

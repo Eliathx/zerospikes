@@ -3,3 +3,4 @@ dist/
 # Copied from the repository root when the package is packed (prepack)
 packages/zerospikes/README.md
 packages/zerospikes/LICENSE
+packages/zerospikes/CHANGELOG.md

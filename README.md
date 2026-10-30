@@ -1,8 +1,14 @@
-# zerospikes
+<h1><img src="https://raw.githubusercontent.com/Eliathx/zerospikes/main/.github/banner.png" alt="zerospikes" width="830"></h1>
 
-Interaction performance limits for Playwright, a kind of performance budget.
-Write a scenario and measure every frame while it runs, record its limits the
-first time like a snapshot, and the test will fail when a later change makes it slower.
+**Interaction performance limits for Playwright.**
+
+[![npm](https://img.shields.io/npm/v/zerospikes)](https://www.npmjs.com/package/zerospikes)
+[![license](https://img.shields.io/npm/l/zerospikes)](LICENSE)
+
+zerospikes measures every frame, the input latency and the main thread's CPU time while
+a Playwright scenario runs. The first run records its limits, like a snapshot, and later
+runs fail when a change makes the interaction slower. The failure names the functions
+that took the time.
 
 ```ts
 import { test } from "zerospikes";
@@ -16,170 +22,23 @@ test("filter as you type", async ({ page, zs }) => {
 });
 ```
 
-```
-  PASS    filter as you type (4.1s)
-  FAIL    sort by client (3.8s)
-  ...
-
-  zerospikes  6 scenarios · 1 over limits · 1 limits recorded
-  FAIL    sort by client › click the header   input down/move/up 351 ms > 87, frame.max 346 ms > 83
-
-  Details, trends and limits: npx zerospikes
+```bash
+npm install -D zerospikes @playwright/test
 ```
 
-The test itself fails with the same detail, the path of the limits file and
-how to accept an intended change.
+## Documentation
 
-## The zerospikes command
-
-`npx zerospikes` opens every scenario's history in the terminal: its status in
-the latest run, each metric against its limit, and its trend across past runs
-and branches. Open a scenario to see where its time went (the hottest functions
-of a profiled run, the `.cpuprofile` to load in DevTools › Performance) and which targets it lags behind.
-
-| Key | What it does |
-|---|---|
-| `r` | Runs the suite; the view updates when it ends |
-| `t` | Lowers the limits the latest run beat |
-| `w` | Saves a failed scenario's numbers as its limits, when it's slower on purpose |
-| `b` | Shows one branch's runs, or all |
-
-`r` runs `npx playwright test`, or the command your package.json names:
-
-```json
-"zerospikes": { "run": "npm run build && playwright test" }
-```
-
-Without a terminal, or with `--print`, it prints the scenario list once.
-`npx zerospikes compare` checks two served builds against each other.
-
-## What it measures
-
-| Metric | What it is |
-|---|---|
-| `frame.max` | Longest gap between two frames while the scenario ran |
-| `frame.slow` | Frames longer than two display frames (> 33.4 ms) |
-| `frame.long` | Long animation frames (> 50 ms) from the LoAF API, Chromium only |
-| `input.down` / `input.move` / `input.up` | Worst time from a pointer event to the next frame, per phase of a gesture. `pointermove` is included |
-| `input.key` / `input.wheel` / `input.click` | Same for key presses, wheel steps and clicks. A click after a pointerup is already in `input.up`: `input.click` only shows for one without it, such as Enter on a button |
-| `memory.heapMB` / `memory.nodes` / `memory.listeners` | For `zs.cycles`: what stays behind after N cycles, with GC forced before every sample. Chromium only |
-
-## Limits
-
-1. Run `npx playwright test`. The first time, each scenario saves how fast it
-   is to `__limits__/<spec>.json`, with the machine it ran on.
-2. From then on, a scenario fails if it gets slower than what was saved.
-3. If you made it faster, press `t` in `npx zerospikes` (or run
-   `npx playwright test -u`) so the faster numbers become the new limits.
-   Recording again only ever lowers a limit: `-u` never lets a slower
-   scenario pass.
-4. If you made it slower on purpose, press `w` on it in `npx zerospikes` (or
-   run `ZS_ALLOW_WORSE=1 npx playwright test -u`) to save the slower numbers.
-
-You can also set fixed limits yourself: `{ limits: { "frame.max": 50 } }`.
-They are checked on every machine.
-
-### On your machine, and in CI
-
-Recorded limits only hold on the machine that recorded them: the same CPU,
-browser version and display rate. Anywhere else a scenario shows as `not
-checked` and passes, and `-u` records that machine's limits in place of the
-saved ones. Commit `__limits__` when one machine, or one fixed CI runner,
-records them for everyone.
-
-CI runners that change hardware from run to run can't keep limits. There, use
-`npx zerospikes compare --baseline <url> --candidate <url>`: it measures both
-builds on the same runner, in alternating sessions, and fails when the
-candidate is slower.
-
-## Errors in the page
-
-A scenario that throws halfway can look faster than one that works. If the
-page logs a `console.error` or an uncaught exception while a scenario runs, it
-shows as `ERROR` instead of `PASS` or `FAIL`. Its numbers aren't compared with
-its limits and can't set or lower them; its history shows them greyed out. The
-test fails and lists the errors: fix
-them and run again. An error in the test's own steps counts against the
-scenarios after it, which start from what those steps left; one after the last
-scenario fails the test.
-
-Errors you expect, such as a warning from React's development build, can be
-left out by their message or the file they come from. A missing `favicon.ico`,
-which the browser asks for on its own, is left out already.
-
-```ts
-// playwright.config.ts
-import { defineConfig } from "@playwright/test";
-import type { ZeroSpikesOptions } from "zerospikes";
-
-export default defineConfig<ZeroSpikesOptions>({
-  use: { zsIgnoreErrors: ["ResizeObserver loop", /^Warning: Each child in a list/] },
-});
-```
-
-## API
-
-```ts
-zs.measure(name, act, { runs, warmup, before, after, settleMs, limits, profileOnFail })
-zs.cycles(name, cycle, { cycles, warmup, limits })   // memory
-zs.drag([x, y], [x2, y2], { steps })                 // one pointermove per frame
-zs.frame()                                           // wait for the next frame
-```
-
-Add the reporter for the summary and the history `npx zerospikes` shows:
-
-```ts
-// playwright.config.ts
-reporter: [["list"], ["zerospikes/reporter"]],
-workers: 1, // perf scenarios shouldn't compete for the CPU
-```
-
-## Desktop apps: Tauri and Electron
-
-To measure an app that is already running instead of a browser Playwright
-launches, import `test` from `zerospikes/app` and give the project the app's
-Chrome DevTools Protocol endpoint. `page` is then the app's window: the same
-one in every test, so put the app back in its starting state in `beforeEach`
-(a `page.goto("/")` reloads it). A project without `zsConnect` runs the same
-spec in a browser.
-
-```ts
-// app.perf.ts
-import { test } from "zerospikes/app";
-```
-
-```ts
-// playwright.config.ts
-import { defineConfig } from "@playwright/test";
-import type { ZeroSpikesAppOptions } from "zerospikes/app";
-
-export default defineConfig<ZeroSpikesAppOptions>({
-  workers: 1, // the app has one window: zerospikes stops a second worker
-  use: { baseURL: "http://localhost:1420" },
-  projects: [{ name: "tauri", use: { zsConnect: "http://127.0.0.1:9222" } }],
-  webServer: {
-    command: "npx tauri dev",
-    env: { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9222" },
-    url: "http://127.0.0.1:9222/json/version", // up once the app's webview answers
-    reuseExistingServer: true,
-    timeout: 900_000,
-  },
-});
-```
-
-- **Tauri** on Windows runs in WebView2, which opens the port when
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` says so. macOS (WKWebView) and Linux
-  (WebKitGTK) have no CDP: measure the frontend in a browser there.
-- **Electron**: start it with `--remote-debugging-port=9222`.
-
-Limits recorded this way say `webview2` or `electron` where a browser run says
-`chromium`, so they are never compared with a browser's.
+- [Getting started](https://zerospikes.eliath.dev/docs)
+- [Writing scenarios](https://zerospikes.eliath.dev/docs/scenarios)
+- [Limits](https://zerospikes.eliath.dev/docs/limits)
+- [CLI and CI](https://zerospikes.eliath.dev/docs/cli)
+- [API reference](https://zerospikes.eliath.dev/docs/api)
 
 ## Example
 
 [examples/20k-table](https://github.com/Eliathx/zerospikes/tree/main/examples/20k-table)
-is a 20,000-row data grid with six scenarios. Its `src/mistakes.ts` holds four
-performance mistakes, all off. From the repository root:
+is a 20,000-row data grid with four performance mistakes to turn on, one at a time,
+and watch zerospikes catch them. From a clone of this repository:
 
 ```bash
 npm install
@@ -187,28 +46,6 @@ npx playwright install chromium
 npm run example:perf
 ```
 
-The first run records the limits and passes. Set `sort: true` in
-`examples/20k-table/src/mistakes.ts`, run it again, and the sort scenario fails.
-`npx zerospikes` in `examples/20k-table` opens it, with the profile pointing at
-`sortRows`, and `r` there runs the suite again. `npm run example` opens the app with a
-live meter, to feel the mistakes by hand.
+## License
 
-| Mistake | What it does | What fails |
-|---|---|---|
-| `filter` | Serializes every row on each key press instead of using the search index | `input.key`, `frame.max` (~2x) |
-| `sort` | Strips accents on every comparison instead of once per row | `input.up`, `frame.max` (~4x) |
-| `resize` | Re-measures every cell each time a column drag starts | `input.down` only (~7x) |
-| `leak` | The detail panel leaves its listener and DOM behind when it closes | `memory.nodes`, `memory.listeners` |
-
-Limits belong to the machine that recorded them: on another machine, record
-your own with `npm run perf:update` in the example's folder.
-
-## Development
-
-```bash
-npm install                      # the library and the example (npm workspaces)
-npx playwright install chromium
-npm test                         # builds the library, runs its unit tests
-```
-
-MIT License
+[MIT](LICENSE)
